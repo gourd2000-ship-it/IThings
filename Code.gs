@@ -1068,7 +1068,7 @@ function refreshQrLinks() {
     
     // QR 이미지 수식 적용 (IMAGE API 사용)
     var cellA1 = masterSheet.getRange(rowNum, qrLinkCol).getA1Notation();
-    var formula = '=IMAGE("https://chart.googleapis.com/chart?chs=150x150&cht=qr&chl=" & ENCODEURL(' + cellA1 + '))';
+    var formula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=" & ENCODEURL(' + cellA1 + '))';
     masterSheet.getRange(rowNum, qrImgCol).setFormula(formula);
   }
   
@@ -1263,7 +1263,7 @@ function createLabelSheet() {
     // 8. QR코드 (F3:F5 또는 M3:M5 병합하여 차트 API 적용, 여백 chld=L|2 옵션 추가)
     var masterRowIndex = i + 2;
     var masterCellA1 = masterSheet.getRange(masterRowIndex, qrLinkCol).getA1Notation();
-    var qrFormula = '=IMAGE("https://chart.googleapis.com/chart?chs=150x150&cht=qr&chld=L|2&chl=" & ENCODEURL(\'마스터\'!' + masterCellA1 + '))';
+    var qrFormula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=" & ENCODEURL(\'마스터\'!' + masterCellA1 + '))';
     
     var qrCell = labelSheet.getRange(r+3, qc, 3, 1);
     qrCell.merge().setFormula(qrFormula)
