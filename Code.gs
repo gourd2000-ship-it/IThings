@@ -1115,9 +1115,9 @@ function createLabelSheet() {
   var settings = getSettings_();
   var schoolName = settings.schoolName || "비아초등학교";
   
-  // 1. 여백 및 격자 너비(Column Width) 정비 (공식 10칸 라벨지 여백 및 규격 정밀 배칭)
-  // Column A: 좌측 페이지 여백 (11.5mm ≈ 43px)
-  labelSheet.setColumnWidth(1, 43);
+  // 1. 여백 및 격자 너비(Column Width) 정비 (크롬 기본 인쇄 여백 17.78mm 고려한 뺄셈 설계)
+  // Column A: 좌측 페이지 여백 (크롬 17.78mm 선적용으로 0px)
+  labelSheet.setColumnWidth(1, 0);
   
   // Label 1 (Column B~G): 총 336px (약 88.9mm)
   labelSheet.setColumnWidth(2, 17);  // 좌측 안전 여백 (Margin)
@@ -1138,17 +1138,18 @@ function createLabelSheet() {
   labelSheet.setColumnWidth(13, 88); // QR코드
   labelSheet.setColumnWidth(14, 17); // 우측 안전 여백 (Margin)
   
-  // Column O: 우측 페이지 여백 (11.5mm ≈ 43px) - 인쇄 시 대칭 및 자동 너비 맞춤 정렬용
-  labelSheet.setColumnWidth(15, 43);
+  // Column O: 우측 페이지 여백 (크롬 17.78mm 선적용으로 0px)
+  labelSheet.setColumnWidth(15, 0);
   
-  // 2. 상단 페이지 여백 설정 (20.5mm ≈ 77px)
-  labelSheet.setRowHeight(1, 77);
+  // 2. 상단 페이지 여백 설정 (공식 20.5mm - 크롬기본 19.05mm = 1.45mm ≈ 5px)
+  labelSheet.setRowHeight(1, 5);
   
   var curRow = 2; // 데이터는 2행(상단 여백 아래)부터 작성 시작
   var colLayouts = [
     { start: 2, contentStart: 3, qr: 6 }, // 1열 라벨 (B~G, 내용 C~F, QR F)
     { start: 9, contentStart: 10, qr: 13 } // 2열 라벨 (I~N, 내용 J~M, QR M)
   ];
+  var labelCount = 0; // 실제로 생성된 라벨의 개수 추적 카운터
   
   // 그리드 라인 표시 설정 (false를 지정하여 숨김 해제 = 눈금선 표시)
   labelSheet.setHiddenGridlines(false);
@@ -1163,7 +1164,22 @@ function createLabelSheet() {
     
     if (!id) continue;
     
-    var layout = colLayouts[i % 2];
+    // 10칸(5줄) 단위 페이지 경계 반복 여백 동적 삽입
+    if (labelCount > 0 && labelCount % 10 === 0) {
+      // 1. 이전 페이지 하단 여백 행 (공식 29.0mm - 크롬기본 19.05mm = 9.95mm ≈ 38px)
+      var bottomPaddingRow = curRow;
+      labelSheet.setRowHeight(bottomPaddingRow, 38);
+      labelSheet.getRange(bottomPaddingRow, 1, 1, 15).clearFormat();
+      
+      // 2. 다음 페이지 상단 여백 행 (공식 20.5mm - 크롬기본 19.05mm = 1.45mm ≈ 5px)
+      var nextTopPaddingRow = curRow + 1;
+      labelSheet.setRowHeight(nextTopPaddingRow, 5);
+      labelSheet.getRange(nextTopPaddingRow, 1, 1, 15).clearFormat();
+      
+      curRow += 2; // 여백 행 2개 추가분 증가
+    }
+    
+    var layout = colLayouts[labelCount % 2];
     var r = curRow;
     var c = layout.start;
     var cc = layout.contentStart;
@@ -1274,9 +1290,10 @@ function createLabelSheet() {
       .setVerticalAlignment("middle");
       
     // 두 번째 열 라벨까지 다 그리면 한 행 아래로 줄바꿈 (애니라벨 10칸은 세로 라벨 간 갭이 0mm이므로 간격 행 없이 7행씩 연속 배치)
-    if (i % 2 === 1) {
+    if (labelCount % 2 === 1) {
       curRow += 7; // 라벨 카드(7개 행)만큼 증가하여 다음 줄로 이동
     }
+    labelCount++;
   }
   
   // 시트 활성화 및 완성 알림 (무한 대기 시간초과 방지 위해 toast 처리)
