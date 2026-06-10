@@ -1147,8 +1147,8 @@ function createLabelSheet() {
     { start: 9, contentStart: 10, qr: 13 } // 2열 라벨 (I~N, 내용 J~M, QR M)
   ];
   
-  // 그리드 라인 표시 설정
-  labelSheet.setGridlines(true);
+  // 그리드 라인 표시 설정 (false를 지정하여 숨김 해제 = 눈금선 표시)
+  labelSheet.setHiddenGridlines(false);
   
   for (var i = 0; i < data.length; i++) {
     var rowData = data[i];
