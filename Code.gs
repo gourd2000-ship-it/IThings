@@ -1116,8 +1116,8 @@ function createLabelSheet() {
   var schoolName = settings.schoolName || "비아초등학교";
   
   // 1. 여백 및 격자 너비(Column Width) 정비 (크롬 기본 인쇄 여백 17.78mm 고려한 뺄셈 설계)
-  // Column A: 좌측 페이지 여백 (크롬 17.78mm 선적용으로 0px)
-  labelSheet.setColumnWidth(1, 0);
+  // Column A: 좌측 페이지 여백 (크롬 17.78mm 선적용으로 최소 1px)
+  labelSheet.setColumnWidth(1, 1);
   
   // Label 1 (Column B~G): 총 336px (약 88.9mm)
   labelSheet.setColumnWidth(2, 17);  // 좌측 안전 여백 (Margin)
@@ -1138,8 +1138,8 @@ function createLabelSheet() {
   labelSheet.setColumnWidth(13, 88); // QR코드
   labelSheet.setColumnWidth(14, 17); // 우측 안전 여백 (Margin)
   
-  // Column O: 우측 페이지 여백 (크롬 17.78mm 선적용으로 0px)
-  labelSheet.setColumnWidth(15, 0);
+  // Column O: 우측 페이지 여백 (크롬 17.78mm 선적용으로 최소 1px)
+  labelSheet.setColumnWidth(15, 1);
   
   // 2. 상단 페이지 여백 설정 (공식 20.5mm - 크롬기본 19.05mm = 1.45mm ≈ 5px)
   labelSheet.setRowHeight(1, 5);
