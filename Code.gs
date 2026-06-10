@@ -1166,9 +1166,9 @@ function createLabelSheet() {
     
     // 10칸(5줄) 단위 페이지 경계 반복 여백 동적 삽입
     if (labelCount > 0 && labelCount % 10 === 0) {
-      // 1. 이전 페이지 하단 여백 행 (공식 29.0mm - 크롬기본 19.05mm = 9.95mm ≈ 38px)
+      // 1. 이전 페이지 하단 여백 행 (1페이지 초과 방지를 위해 최소 1px로 여백 제거)
       var bottomPaddingRow = curRow;
-      labelSheet.setRowHeight(bottomPaddingRow, 38);
+      labelSheet.setRowHeight(bottomPaddingRow, 1);
       labelSheet.getRange(bottomPaddingRow, 1, 1, 15).clearFormat();
       
       // 2. 다음 페이지 상단 여백 행 (공식 20.5mm - 크롬기본 19.05mm = 1.45mm ≈ 5px)
