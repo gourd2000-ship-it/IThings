@@ -134,6 +134,43 @@ function getSettings_() {
     }
   }
   
+  // 마스터 시트에서 실시간 취급자 및 설치장소 고유 데이터 수집하여 추천 풀에 통합
+  var masterSheet = ss.getSheetByName("마스터");
+  if (masterSheet) {
+    var masterLastRow = masterSheet.getLastRow();
+    if (masterLastRow >= 2) {
+      var headerMapping = getHeaderMapping_(masterSheet);
+      
+      // 1. 설치장소 실시간 수집 및 병합
+      var locCol = headerMapping["설치장소"];
+      if (locCol) {
+        var masterLocs = masterSheet.getRange(2, locCol, masterLastRow - 1, 1).getValues();
+        for (var k = 0; k < masterLocs.length; k++) {
+          var val = masterLocs[k][0].toString().trim();
+          if (val && defaultSettings.locations.indexOf(val) === -1) {
+            defaultSettings.locations.push(val);
+          }
+        }
+      }
+      
+      // 2. 취급자 실시간 수집 및 병합
+      var mgrCol = headerMapping["취급자"];
+      if (mgrCol) {
+        var masterMgrs = masterSheet.getRange(2, mgrCol, masterLastRow - 1, 1).getValues();
+        for (var k = 0; k < masterMgrs.length; k++) {
+          var val = masterMgrs[k][0].toString().trim();
+          if (val && defaultSettings.managers.indexOf(val) === -1) {
+            defaultSettings.managers.push(val);
+          }
+        }
+      }
+    }
+  }
+  
+  // 추천 편의를 위해 가나다순 오름차순 정렬
+  defaultSettings.locations.sort();
+  defaultSettings.managers.sort();
+  
   return defaultSettings;
 }
 
@@ -471,6 +508,17 @@ function createHtml_(device, settings) {
       textarea {
         resize: vertical;
         min-height: 80px;
+      }
+      /* 하이브리드 입력 추천상자 전용 화살표 아이콘 스타일 */
+      input[list] {
+        background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%239ca3af%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.9%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+        background-repeat: no-repeat;
+        background-position: right 16px center;
+        background-size: 10px auto;
+        padding-right: 40px;
+      }
+      input[list]::-webkit-calendar-picker-indicator {
+        display: none !important;
       }
       .btn {
         width: 100%;
@@ -843,6 +891,29 @@ function createHtml_(device, settings) {
         document.getElementById("success-view").style.display = "none";
         document.getElementById("form-view").style.display = "block";
       }
+      
+      // 입력창 클릭/포커스 시 자동으로 추천 목록(드롭다운)을 강제 팝업하는 함수
+      function bindAutoPicker(inputId) {
+        const inputEl = document.getElementById(inputId);
+        if (!inputEl) return;
+        
+        const triggerPicker = () => {
+          if (typeof inputEl.showPicker === "function") {
+            try {
+              inputEl.showPicker();
+            } catch (err) {
+              console.log("showPicker failed: ", err);
+            }
+          }
+        };
+        
+        inputEl.addEventListener("focus", triggerPicker);
+        inputEl.addEventListener("click", triggerPicker);
+      }
+      
+      // 설치장소 및 취급자 입력창에 자동 펼침 리스너 바인딩
+      bindAutoPicker("location");
+      bindAutoPicker("manager");
     </script>
   </body>
 </html>`;
