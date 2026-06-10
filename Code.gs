@@ -636,11 +636,13 @@ function createHtml_(device, settings) {
         <form id="update-form" onsubmit="submitForm(event)">
           <div class="form-group">
             <label for="location">설치장소</label>
-            <select id="location" required></select>
+            <input type="text" id="location" list="location-list" placeholder="설치장소 선택 또는 직접 입력" required autocomplete="off">
+            <datalist id="location-list"></datalist>
           </div>
           <div class="form-group">
             <label for="manager">취급자</label>
-            <select id="manager" required></select>
+            <input type="text" id="manager" list="manager-list" placeholder="취급자 선택 또는 직접 입력" required autocomplete="off">
+            <datalist id="manager-list"></datalist>
           </div>
           <div class="form-group">
             <label for="notes">비고</label>
@@ -727,29 +729,23 @@ function createHtml_(device, settings) {
       document.getElementById("disp-model").innerText = device["모델명"] || "-";
       document.getElementById("disp-date").innerText = device["도입일자"] || "-";
       
-      // 설치장소 셀렉트박스 아이템 설정
-      const locSelect = document.getElementById("location");
+      // 설치장소 datalist 추천 목록 설정
+      const locList = document.getElementById("location-list");
       settings.locations.forEach(loc => {
         const opt = document.createElement("option");
         opt.value = loc;
-        opt.innerText = loc;
-        if (device["설치장소"] && device["설치장소"].toString().trim() === loc.trim()) {
-          opt.selected = true;
-        }
-        locSelect.appendChild(opt);
+        locList.appendChild(opt);
       });
+      document.getElementById("location").value = device["설치장소"] || "";
       
-      // 취급자 셀렉트박스 아이템 설정
-      const mgrSelect = document.getElementById("manager");
+      // 취급자 datalist 추천 목록 설정
+      const mgrList = document.getElementById("manager-list");
       settings.managers.forEach(mgr => {
         const opt = document.createElement("option");
         opt.value = mgr;
-        opt.innerText = mgr;
-        if (device["취급자"] && device["취급자"].toString().trim() === mgr.trim()) {
-          opt.selected = true;
-        }
-        mgrSelect.appendChild(opt);
+        mgrList.appendChild(opt);
       });
+      document.getElementById("manager").value = device["취급자"] || "";
       
       // 비고란 채우기
       document.getElementById("notes").value = device["비고"] || "";
