@@ -1115,31 +1115,34 @@ function createLabelSheet() {
   var settings = getSettings_();
   var schoolName = settings.schoolName || "비아초등학교";
   
-  // 1. 여백 및 격자 너비(Column Width) 정비 (애니라벨 10칸 규격 A4 용지 정밀 배칭 & 안전 여백 반영)
-  // Column A: 좌측 페이지 여백 (15.5mm ≈ 58px)
-  labelSheet.setColumnWidth(1, 58);
+  // 1. 여백 및 격자 너비(Column Width) 정비 (공식 10칸 라벨지 여백 및 규격 정밀 배칭)
+  // Column A: 좌측 페이지 여백 (11.5mm ≈ 43px)
+  labelSheet.setColumnWidth(1, 43);
   
   // Label 1 (Column B~G): 총 336px (약 88.9mm)
-  labelSheet.setColumnWidth(2, 12);  // 좌측 안전 여백 (Margin)
+  labelSheet.setColumnWidth(2, 17);  // 좌측 안전 여백 (Margin)
   labelSheet.setColumnWidth(3, 80);  // 종류, 관리번호 라벨 항목명
-  labelSheet.setColumnWidth(4, 48);  // 직위 (교사 등)
-  labelSheet.setColumnWidth(5, 96);  // 이름
+  labelSheet.setColumnWidth(4, 44);  // 직위 (교사 등)
+  labelSheet.setColumnWidth(5, 90);  // 이름
   labelSheet.setColumnWidth(6, 88);  // QR코드
-  labelSheet.setColumnWidth(7, 12);  // 우측 안전 여백 (Margin)
+  labelSheet.setColumnWidth(7, 17);  // 우측 안전 여백 (Margin)
   
-  // Column H: 라벨 간 가로 갭 (1.2mm ≈ 5px)
-  labelSheet.setColumnWidth(8, 5);
+  // Column H: 라벨 간 가로 갭 (9.2mm ≈ 35px)
+  labelSheet.setColumnWidth(8, 35);
   
   // Label 2 (Column I~N): 총 336px (약 88.9mm)
-  labelSheet.setColumnWidth(9, 12);  // 좌측 안전 여백 (Margin)
+  labelSheet.setColumnWidth(9, 17);  // 좌측 안전 여백 (Margin)
   labelSheet.setColumnWidth(10, 80); // 종류, 관리번호 라벨 항목명
-  labelSheet.setColumnWidth(11, 48); // 직위 (교사 등)
-  labelSheet.setColumnWidth(12, 96); // 이름
+  labelSheet.setColumnWidth(11, 44); // 직위 (교사 등)
+  labelSheet.setColumnWidth(12, 90); // 이름
   labelSheet.setColumnWidth(13, 88); // QR코드
-  labelSheet.setColumnWidth(14, 12); // 우측 안전 여백 (Margin)
+  labelSheet.setColumnWidth(14, 17); // 우측 안전 여백 (Margin)
   
-  // 2. 상단 페이지 여백 설정 (18.5mm ≈ 70px)
-  labelSheet.setRowHeight(1, 70);
+  // Column O: 우측 페이지 여백 (11.5mm ≈ 43px) - 인쇄 시 대칭 및 자동 너비 맞춤 정렬용
+  labelSheet.setColumnWidth(15, 43);
+  
+  // 2. 상단 페이지 여백 설정 (20.5mm ≈ 77px)
+  labelSheet.setRowHeight(1, 77);
   
   var curRow = 2; // 데이터는 2행(상단 여백 아래)부터 작성 시작
   var colLayouts = [
@@ -1167,13 +1170,13 @@ function createLabelSheet() {
     var qc = layout.qr;
     
     // 행 높이 조절 (7개 행 합이 197px로 개별 라벨 높이인 52mm에 정확히 매칭)
-    labelSheet.setRowHeight(r, 12);   // 상단 안전 여백 (Row Margin)
+    labelSheet.setRowHeight(r, 13);   // 상단 안전 여백 (Row Margin)
     labelSheet.setRowHeight(r+1, 28); // 기관명 (학교명)
-    labelSheet.setRowHeight(r+2, 35); // 종류
-    labelSheet.setRowHeight(r+3, 37); // 관리 번호
-    labelSheet.setRowHeight(r+4, 37); // 관리책임자
+    labelSheet.setRowHeight(r+2, 34); // 종류
+    labelSheet.setRowHeight(r+3, 36); // 관리 번호
+    labelSheet.setRowHeight(r+4, 36); // 관리책임자
     labelSheet.setRowHeight(r+5, 36); // 취급자
-    labelSheet.setRowHeight(r+6, 12); // 하단 안전 여백 (Row Margin)
+    labelSheet.setRowHeight(r+6, 14); // 하단 안전 여백 (Row Margin)
     
     // 1. 물리적 라벨 영역 배경색 및 연한 칼선 테두리 설정 (B~G열, r~r+6행)
     var cardRange = labelSheet.getRange(r, c, 7, 6);
