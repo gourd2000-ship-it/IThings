@@ -1188,14 +1188,14 @@ function createLabelSheet() {
     // 행 높이 조절
     var isLastRowOfPage = (Math.floor((labelCount % 10) / 2) === 4);
     if (isLastRowOfPage) {
-      // 5번째 줄 (9, 10칸) - A4 페이지 초과 밀림 방지를 위해 높이를 49mm(186px)로 축소
-      labelSheet.setRowHeight(r, 8);     // 상단 안전 여백 (Row Margin)
-      labelSheet.setRowHeight(r+1, 28);  // 기관명 (학교명)
-      labelSheet.setRowHeight(r+2, 34);  // 종류
-      labelSheet.setRowHeight(r+3, 36);  // 관리 번호
-      labelSheet.setRowHeight(r+4, 36);  // 관리책임자
-      labelSheet.setRowHeight(r+5, 36);  // 취급자
-      labelSheet.setRowHeight(r+6, 8);   // 하단 안전 여백 (Row Margin)
+      // 5번째 줄 (9, 10칸) - A4 페이지 초과 밀림 방지를 위해 높이를 45mm(170px), 내부 표를 42mm(159px)로 축소
+      labelSheet.setRowHeight(r, 5);     // 상단 안전 여백 (Row Margin)
+      labelSheet.setRowHeight(r+1, 24);  // 기관명 (학교명)
+      labelSheet.setRowHeight(r+2, 32);  // 종류
+      labelSheet.setRowHeight(r+3, 34);  // 관리 번호
+      labelSheet.setRowHeight(r+4, 34);  // 관리책임자
+      labelSheet.setRowHeight(r+5, 35);  // 취급자
+      labelSheet.setRowHeight(r+6, 6);   // 하단 안전 여백 (Row Margin)
     } else {
       // 일반 줄 - 높이 52mm(197px)
       labelSheet.setRowHeight(r, 13);    // 상단 안전 여백 (Row Margin)
