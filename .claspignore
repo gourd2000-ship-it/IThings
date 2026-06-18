@@ -1,3 +1,5 @@
 docs/**
 *.md
 Code_backup.gs
+node_modules/**
+test_webapp.js

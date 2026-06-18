@@ -30,6 +30,37 @@ function doGet(e) {
   // 1. URL 쿼리 파라미터에서 기기 식별을 위한 'id' (관리번호) 추출
   var id = e.parameter.id;
   
+  if (id === "DEBUG_TEST") {
+    try {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var sheet = ss.getSheetByName("마스터");
+      var ids = [];
+      if (sheet) {
+        var lastRow = sheet.getLastRow();
+        if (lastRow >= 2) {
+          var headerMapping = getHeaderMapping_(sheet);
+          var idCol = headerMapping["관리번호"];
+          if (idCol) {
+            ids = sheet.getRange(2, idCol, lastRow - 1, 1).getValues().map(function(r) { return r[0]; });
+          }
+        }
+      }
+      var settings = getSettings_();
+      var debugObj = {
+        ids: ids,
+        settings: settings,
+        sheets: ss.getSheets().map(function(s) { return s.getName(); })
+      };
+      return HtmlService.createHtmlOutput("DEBUG_DATA:" + JSON.stringify(debugObj))
+        .setTitle("Debug Info")
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    } catch (e) {
+      return HtmlService.createHtmlOutput("DEBUG_ERROR:" + e.toString() + "\n" + e.stack)
+        .setTitle("Debug Error")
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    }
+  }
+  
   // 2. id 값이 전달되지 않은 경우 에러 화면 반환
   if (!id) {
     return HtmlService.createHtmlOutput(createErrorHtml_("관리번호(id)가 전달되지 않았습니다."))
@@ -99,7 +130,9 @@ function getSettings_() {
     webAppUrl: "",
     locations: [],
     managers: [],
+    deviceTypes: ["PC", "노트북", "프린터", "3D프린터", "TV", "모니터", "태블릿", "기타"],
     pcSensitiveEditAllowed: false,
+    basicInfoEditAllowed: false,
     schoolName: "비아초등학교",
     managerName: "교사 이영희"
   };
@@ -127,6 +160,8 @@ function getSettings_() {
       defaultSettings.managers = val.split(",").map(function(x) { return x.trim(); }).filter(Boolean);
     } else if (key === "PC민감정보수정허용") {
       defaultSettings.pcSensitiveEditAllowed = (val.toUpperCase() === "Y" || val.toUpperCase() === "TRUE");
+    } else if (key === "기본정보수정허용") {
+      defaultSettings.basicInfoEditAllowed = (val.toUpperCase() === "Y" || val.toUpperCase() === "TRUE");
     } else if (key === "기관명") {
       defaultSettings.schoolName = val;
     } else if (key === "관리자이름") {
@@ -164,12 +199,25 @@ function getSettings_() {
           }
         }
       }
+      
+      // 3. 기기 종류 실시간 수집 및 병합
+      var typeCol = headerMapping["종류"];
+      if (typeCol) {
+        var masterTypes = masterSheet.getRange(2, typeCol, masterLastRow - 1, 1).getValues();
+        for (var k = 0; k < masterTypes.length; k++) {
+          var val = masterTypes[k][0].toString().trim();
+          if (val && defaultSettings.deviceTypes.indexOf(val) === -1) {
+            defaultSettings.deviceTypes.push(val);
+          }
+        }
+      }
     }
   }
   
   // 추천 편의를 위해 가나다순 오름차순 정렬
   defaultSettings.locations.sort();
   defaultSettings.managers.sort();
+  defaultSettings.deviceTypes.sort();
   
   return defaultSettings;
 }
@@ -254,7 +302,7 @@ function getDeviceById_(id) {
  * @param {Object} formData - 웹 폼으로부터 전달받은 정보 객체
  * @return {Object} 처리 성공 상태 및 메시지 객체
  */
-function updateDevice_(id, formData) {
+function updateDevice(id, formData) {
   // 동시 쓰기 작업 시 데이터 유실 방지를 위한 Lock 서비스 획득
   var lock = LockService.getScriptLock();
   try {
@@ -284,6 +332,7 @@ function updateDevice_(id, formData) {
     // PC 기기 및 민감정보 수정 권한 여부 확인
     var isPc = (device["종류"] && device["종류"].toString().trim().toUpperCase() === "PC");
     var allowSensitive = isPc && settings.pcSensitiveEditAllowed;
+    var allowBasicInfo = settings.basicInfoEditAllowed;
     
     // 2. 수정 데이터 정의
     var updateFields = {
@@ -300,17 +349,26 @@ function updateDevice_(id, formData) {
       if (formData.password2nd !== undefined) updateFields["비밀번호(2차)"] = formData.password2nd;
     }
     
-    // [확장성 구현] 폼 데이터에 다른 항목들이 추가로 유입될 경우 자동 바인딩 대응
-    if (formData.deviceType !== undefined && headerMapping["종류"]) updateFields["종류"] = formData.deviceType;
-    if (formData.manufacturer !== undefined && headerMapping["제조사"]) updateFields["제조사"] = formData.manufacturer;
-    if (formData.modelName !== undefined && headerMapping["모델명"]) updateFields["모델명"] = formData.modelName;
-    if (formData.introDate !== undefined && headerMapping["도입일자"]) updateFields["도입일자"] = formData.introDate;
+    // 기본 정보 수정 권한 허용 시 기본 정보도 포함
+    if (allowBasicInfo) {
+      if (formData.deviceType !== undefined && headerMapping["종류"]) updateFields["종류"] = formData.deviceType;
+      if (formData.manufacturer !== undefined && headerMapping["제조사"]) updateFields["제조사"] = formData.manufacturer;
+      if (formData.modelName !== undefined && headerMapping["모델명"]) updateFields["모델명"] = formData.modelName;
+      if (formData.introDate !== undefined && headerMapping["도입일자"]) updateFields["도입일자"] = formData.introDate;
+    }
     
     // 3. 실제 마스터 시트에 값 쓰기
     for (var header in updateFields) {
       // [보안] 권한이 없는 경우 IP 및 비밀번호 수정 차단
       if (header === "IP" || header.indexOf("비밀번호") !== -1) {
         if (!allowSensitive) {
+          continue;
+        }
+      }
+      
+      // [보안] 권한이 없는 경우 기본 정보 수정 차단
+      if (header === "종류" || header === "제조사" || header === "모델명" || header === "도입일자") {
+        if (!allowBasicInfo) {
           continue;
         }
       }
@@ -478,6 +536,37 @@ function createHtml_(device, settings) {
       .info-value {
         font-size: 14px;
         font-weight: 500;
+      }
+      .info-value input, .info-value select {
+        width: 100%;
+        background: transparent;
+        border: none;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.2);
+        color: var(--text-color);
+        font-family: var(--font-family);
+        font-size: 14px;
+        font-weight: 500;
+        padding: 2px 0;
+        outline: none;
+        box-shadow: none;
+        border-radius: 0;
+        transition: border-color 0.2s;
+      }
+      .info-value select {
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%239ca3af%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.9%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+        background-repeat: no-repeat;
+        background-position: right 4px center;
+        background-size: 10px auto;
+        padding-right: 20px;
+      }
+      .info-value input:focus, .info-value select:focus {
+        border-bottom: 1px solid var(--input-focus);
+      }
+      .info-value input[type="date"] {
+        color-scheme: dark;
       }
       .form-group {
         margin-bottom: 18px;
@@ -664,19 +753,19 @@ function createHtml_(device, settings) {
           </div>
           <div class="info-item">
             <div class="info-label">종류</div>
-            <div class="info-value" id="disp-type"></div>
+            <div class="info-value" id="disp-type-container"></div>
           </div>
           <div class="info-item">
             <div class="info-label">제조사</div>
-            <div class="info-value" id="disp-brand"></div>
+            <div class="info-value" id="disp-brand-container"></div>
           </div>
           <div class="info-item">
             <div class="info-label">모델명</div>
-            <div class="info-value" id="disp-model"></div>
+            <div class="info-value" id="disp-model-container"></div>
           </div>
           <div class="info-item full-width">
             <div class="info-label">도입일자</div>
-            <div class="info-value" id="disp-date"></div>
+            <div class="info-value" id="disp-date-container"></div>
           </div>
         </div>
         
@@ -772,10 +861,87 @@ function createHtml_(device, settings) {
       
       // 기기 기본 정보 화면 바인딩
       document.getElementById("disp-id").innerText = device["관리번호"] || "-";
-      document.getElementById("disp-type").innerText = device["종류"] || "-";
-      document.getElementById("disp-brand").innerText = device["제조사"] || "-";
-      document.getElementById("disp-model").innerText = device["모델명"] || "-";
-      document.getElementById("disp-date").innerText = device["도입일자"] || "-";
+      
+      const basicEdit = settings.basicInfoEditAllowed;
+      
+      // 종류 바인딩 (드롭다운 선택상자)
+      const typeContainer = document.getElementById("disp-type-container");
+      if (basicEdit) {
+        let selectHtml = '<select id="type" required>';
+        // 설정과 마스터에서 실시간 병합된 종류 목록 순회
+        if (settings.deviceTypes && settings.deviceTypes.length > 0) {
+          settings.deviceTypes.forEach(t => {
+            selectHtml += '<option value="' + t + '">' + t + '</option>';
+          });
+        } else {
+          // 기본 폴백 데이터
+          ["PC", "노트북", "프린터", "3D프린터", "TV", "모니터", "태블릿", "기타"].forEach(t => {
+            selectHtml += '<option value="' + t + '">' + t + '</option>';
+          });
+        }
+        selectHtml += '</select>';
+        typeContainer.innerHTML = selectHtml;
+        
+        // 현재 기기의 종류를 선택 값으로 매핑 (없으면 기타)
+        document.getElementById("type").value = device["종류"] || "기타";
+      } else {
+        typeContainer.innerHTML = '<span id="disp-type"></span>';
+        document.getElementById("disp-type").innerText = device["종류"] || "-";
+      }
+      
+      // 제조사 바인딩
+      const brandContainer = document.getElementById("disp-brand-container");
+      if (basicEdit) {
+        brandContainer.innerHTML = '<input type="text" id="brand" placeholder="제조사 입력">';
+        document.getElementById("brand").value = device["제조사"] || "";
+      } else {
+        brandContainer.innerHTML = '<span id="disp-brand"></span>';
+        document.getElementById("disp-brand").innerText = device["제조사"] || "-";
+      }
+      
+      // 모델명 바인딩
+      const modelContainer = document.getElementById("disp-model-container");
+      if (basicEdit) {
+        modelContainer.innerHTML = '<input type="text" id="model" placeholder="모델명 입력">';
+        document.getElementById("model").value = device["모델명"] || "";
+      } else {
+        modelContainer.innerHTML = '<span id="disp-model"></span>';
+        document.getElementById("disp-model").innerText = device["모델명"] || "-";
+      }
+      
+      // 도입일자 바인딩
+      const dateContainer = document.getElementById("disp-date-container");
+      if (basicEdit) {
+        dateContainer.innerHTML = '<input type="date" id="date">';
+        let rawDate = device["도입일자"] || "";
+        let formattedDate = "";
+        if (rawDate) {
+          const matches = rawDate.toString().match(/\d+/g);
+          if (matches && matches.length >= 3) {
+            let year = matches[0];
+            let month = matches[1];
+            let day = matches[2];
+            if (year.length === 2) year = "20" + year;
+            if (month.length === 1) month = "0" + month;
+            if (day.length === 1) day = "0" + day;
+            formattedDate = year + "-" + month + "-" + day;
+          } else {
+            try {
+              const d = new Date(rawDate);
+              if (!isNaN(d.getTime())) {
+                const y = d.getFullYear();
+                const m = ("0" + (d.getMonth() + 1)).slice(-2);
+                const dayVal = ("0" + d.getDate()).slice(-2);
+                formattedDate = y + "-" + m + "-" + dayVal;
+              }
+            } catch(e) {}
+          }
+        }
+        document.getElementById("date").value = formattedDate;
+      } else {
+        dateContainer.innerHTML = '<span id="disp-date"></span>';
+        document.getElementById("disp-date").innerText = device["도입일자"] || "-";
+      }
       
       // 설치장소 datalist 추천 목록 설정
       const locList = document.getElementById("location-list");
@@ -836,6 +1002,13 @@ function createHtml_(device, settings) {
           formData.password2nd = document.getElementById("password2nd").value;
         }
         
+        if (basicEdit) {
+          formData.deviceType = document.getElementById("type").value;
+          formData.manufacturer = document.getElementById("brand").value;
+          formData.modelName = document.getElementById("model").value;
+          formData.introDate = document.getElementById("date").value;
+        }
+        
         // Google Apps Script API 비동기 서버 호출
         google.script.run
           .withSuccessHandler(function(response) {
@@ -864,6 +1037,27 @@ function createHtml_(device, settings) {
                 document.getElementById("sum-row-pw2").style.display = "none";
               }
               
+              // 로컬 데이터 객체 업데이트 (다시 수정 화면 재진입 시 정합성 보장)
+              device["설치장소"] = formData.location;
+              device["취급자"] = formData.manager;
+              device["비고"] = formData.notes;
+              if (showSensitive) {
+                device["IP"] = formData.ip;
+                device["비밀번호(1차)"] = formData.password1st;
+                device["비밀번호(2차)"] = formData.password2nd;
+              }
+              if (basicEdit) {
+                device["종류"] = formData.deviceType;
+                device["제조사"] = formData.manufacturer;
+                device["모델명"] = formData.modelName;
+                device["도입일자"] = formData.introDate;
+                
+                document.getElementById("type").value = formData.deviceType;
+                document.getElementById("brand").value = formData.manufacturer;
+                document.getElementById("model").value = formData.modelName;
+                document.getElementById("date").value = formData.introDate;
+              }
+              
               // 화면 전환
               document.getElementById("form-view").style.display = "none";
               document.getElementById("success-view").style.display = "block";
@@ -877,7 +1071,7 @@ function createHtml_(device, settings) {
             btnText.innerText = "수정 내용 저장";
             showError("네트워크 에러가 발생했습니다: " + error.message);
           })
-          .updateDevice_(id, formData);
+          .updateDevice(id, formData);
       }
       
       function showError(msg) {
@@ -1034,7 +1228,7 @@ function setupSheets() {
   
   // 마스터 헤더 정의 (보안 설정에 따른 조건부 수정 필드 및 관리책임자 필드 포함)
   var masterHeaders = [
-    "연번", "관리번호", "설치장소", "관리책임자", "취급자", "종류", "제조사", "모델명", "도입일자", "비고", "IP", "비밀번호(1차)", "비밀번호(2차)", "QR링크", "QR이미지", "최종수정일"
+    "연번", "관리번호", "설치장소", "관리책임자", "취급자", "종류", "제조사", "모델명", "도입일자", "비고", "라벨인쇄", "IP", "비밀번호(1차)", "비밀번호(2차)", "QR링크", "QR이미지", "최종수정일"
   ];
   
   masterSheet.getRange(1, 1, 1, masterHeaders.length).setValues([masterHeaders])
@@ -1044,14 +1238,23 @@ function setupSheets() {
   // 테스트용 기초 샘플 데이터 삽입 (기존 데이터가 하나도 없을 때만 삽입)
   if (masterSheet.getLastRow() === 1) {
     masterSheet.appendRow([
-      1, "EQ-2026-001", "컴퓨터실", "교사 홍길동", "교사 홍길동", "노트북", "삼성전자", "갤럭시북4", "2026-03-02", "배터리 수명 체크 필요", "", "", "", "", "", ""
+      1, "EQ-2026-001", "컴퓨터실", "교사 홍길동", "교사 홍길동", "노트북", "삼성전자", "갤럭시북4", "2026-03-02", "배터리 수명 체크 필요", false, "", "", "", "", "", ""
     ]);
     masterSheet.appendRow([
-      2, "EQ-2026-002", "과학실", "교사 김철수", "교사 김철수", "3D프린터", "신도리코", "3DWOX 1", "2025-11-15", "노즐 정비 완료", "", "", "", "", "", ""
+      2, "EQ-2026-002", "과학실", "교사 김철수", "교사 김철수", "3D프린터", "신도리코", "3DWOX 1", "2025-11-15", "노즐 정비 완료", false, "", "", "", "", "", ""
     ]);
     masterSheet.appendRow([
-      3, "EQ-2026-003", "행정실", "교사 이영희", "교사 이영희", "PC", "LG전자", "울트라PC", "2026-01-10", "행정 업무용 PC", "192.168.10.22", "admin@2026", "sec#7890", "", "", ""
+      3, "EQ-2026-003", "행정실", "교사 이영희", "교사 이영희", "PC", "LG전자", "울트라PC", "2026-01-10", "행정 업무용 PC", false, "192.168.10.22", "admin@2026", "sec#7890", "", "", ""
     ]);
+  }
+
+  // 라벨인쇄 열에 체크박스 유효성 검사 적용 (기존 데이터 행 포함 전체 일괄 설정)
+  var printColIdx = masterHeaders.indexOf("라벨인쇄") + 1;
+  if (printColIdx > 0) {
+    var lastRow = masterSheet.getLastRow();
+    var checkboxRange = masterSheet.getRange(2, printColIdx, lastRow >= 2 ? lastRow - 1 : 1, 1);
+    var rule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+    checkboxRange.setDataValidation(rule);
   }
   
   // 2. [설정] 시트 초기 구성
@@ -1072,6 +1275,7 @@ function setupSheets() {
     ["설치장소목록", "교무실,행정실,1-1,1-2,1-3,과학실,컴퓨터실"],
     ["취급자목록", "홍길동,김철수,이영희,박민수"],
     ["PC민감정보수정허용", "N"],
+    ["기본정보수정허용", "N"],
     ["관리자이름", "교사 이영희"]
   ];
   
@@ -1096,6 +1300,7 @@ function refreshQrLinks() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var masterSheet = ss.getSheetByName("마스터");
   var settings = getSettings_();
+  var ui = SpreadsheetApp.getUi();
   
   if (!masterSheet) {
     throw new Error("마스터 시트를 찾을 수 없습니다.");
@@ -1110,6 +1315,7 @@ function refreshQrLinks() {
   var idCol = headerMapping["관리번호"];
   var qrLinkCol = headerMapping["QR링크"];
   var qrImgCol = headerMapping["QR이미지"];
+  var printCol = headerMapping["라벨인쇄"];
   
   if (!idCol || !qrLinkCol || !qrImgCol) {
     throw new Error("필수 헤더가 누락되었습니다. (관리번호, QR링크, QR이미지 필요)");
@@ -1120,7 +1326,28 @@ function refreshQrLinks() {
     throw new Error("[설정] 시트에서 '웹앱URL'을 실제 주소로 정상 수정하여 입력한 뒤 다시 실행해 주세요.");
   }
   
+  // 1. 유저 경고 및 모드 결정 팝업
+  var response = ui.alert(
+    "QR 링크 및 이미지 일괄 갱신",
+    "마스터 시트의 [모든 기기]의 QR코드를 처음부터 다시 갱신하시겠습니까?\n\n" +
+    "[예] ➔ 전체 기기 일괄 재갱신 (기존 정보 덮어씀)\n" +
+    "[아니오] ➔ 신규 기기(QR이 비어 있는 칸) 및 라벨인쇄 체크된 기기만 선별 갱신\n" +
+    "[취소] ➔ 작업 취소 및 중단",
+    ui.ButtonSet.YES_NO_CANCEL
+  );
+  
+  if (response === ui.Button.CANCEL) {
+    ss.toast("QR 코드 갱신 작업이 취소되었습니다.", "시스템 알림");
+    return;
+  }
+  
+  var isForceAll = (response === ui.Button.YES);
+  
   var idValues = masterSheet.getRange(2, idCol, lastRow - 1, 1).getValues();
+  var printValues = printCol ? masterSheet.getRange(2, printCol, lastRow - 1, 1).getValues() : [];
+  var qrLinkValues = masterSheet.getRange(2, qrLinkCol, lastRow - 1, 1).getValues();
+  
+  var updateCount = 0;
   
   // 순회하며 링크 생성 및 IMAGE 폼 수식 적용
   for (var i = 0; i < idValues.length; i++) {
@@ -1128,6 +1355,16 @@ function refreshQrLinks() {
     if (!id) continue;
     
     var rowNum = i + 2;
+    var currentLink = qrLinkValues[i][0].toString().trim();
+    var isChecked = printValues.length > 0 ? (printValues[i][0] === true || printValues[i][0].toString().toUpperCase() === "TRUE") : false;
+    
+    // 강제 전체 갱신이 아닌 경우: 이미 QR링크가 있고, 라벨인쇄 체크가 꺼져 있다면 건너뜀
+    if (!isForceAll) {
+      if (currentLink && !isChecked) {
+        continue;
+      }
+    }
+    
     var finalQrLink = webAppUrl + (webAppUrl.indexOf("?") === -1 ? "?" : "&") + "id=" + encodeURIComponent(id);
     
     // QR 링크 텍스트 셀 업데이트
@@ -1137,11 +1374,15 @@ function refreshQrLinks() {
     var cellA1 = masterSheet.getRange(rowNum, qrLinkCol).getA1Notation();
     var formula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=" & ENCODEURL(' + cellA1 + '))';
     masterSheet.getRange(rowNum, qrImgCol).setFormula(formula);
+    
+    updateCount++;
   }
   
-  // 무한 실행대기를 예방하기 위해 blocking alert을 non-blocking toast(우측 하단 알림) 및 콘솔 로그로 대체
-  ss.toast("QR 링크 및 이미지 갱신 완료: 모든 데이터의 QR코드 링크 업데이트가 완료되었습니다.", "시스템 알림");
-  console.log("QR 링크 및 이미지 갱신 완료: 모든 데이터의 QR코드 링크 업데이트가 완료되었습니다.");
+  var msg = isForceAll 
+    ? "전체 기기(" + updateCount + "대)의 QR코드 갱신이 완료되었습니다." 
+    : "신규 및 선택된 기기(" + updateCount + "대)의 QR코드 선별 갱신이 완료되었습니다.";
+  ss.toast(msg, "시스템 알림");
+  console.log(msg);
 }
 
 /**
@@ -1151,6 +1392,8 @@ function refreshQrLinks() {
 function createLabelSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var masterSheet = ss.getSheetByName("마스터");
+  var ui = SpreadsheetApp.getUi();
+  
   if (!masterSheet) {
     throw new Error("마스터 시트를 찾을 수 없습니다.");
   }
@@ -1173,14 +1416,109 @@ function createLabelSheet() {
   var managerCol = headerMapping["관리책임자"];
   var operatorCol = headerMapping["취급자"];
   var qrLinkCol = headerMapping["QR링크"];
+  var qrImgCol = headerMapping["QR이미지"];
+  var printCol = headerMapping["라벨인쇄"];
   
-  if (!idCol || !typeCol || !managerCol || !operatorCol || !qrLinkCol) {
-    throw new Error("마스터 시트에 필수 컬럼이 부족합니다. (관리번호, 종류, 관리책임자, 취급자, QR링크 필요)");
+  if (!idCol || !typeCol || !managerCol || !operatorCol || !qrLinkCol || !qrImgCol) {
+    throw new Error("마스터 시트에 필수 컬럼이 부족합니다. (관리번호, 종류, 관리책임자, 취급자, QR링크, QR이미지 필요)");
   }
   
   var data = masterSheet.getRange(2, 1, lastRow - 1, masterSheet.getLastColumn()).getValues();
+  var printValues = printCol ? masterSheet.getRange(2, printCol, lastRow - 1, 1).getValues() : [];
+  
+  // 1. 라벨인쇄가 체크된 대상 기기 선별 필터링
+  var targetData = [];
+  for (var i = 0; i < data.length; i++) {
+    var id = data[i][idCol - 1];
+    var isChecked = printValues.length > 0 ? (printValues[i][0] === true || printValues[i][0].toString().toUpperCase() === "TRUE") : false;
+    if (id && isChecked) {
+      targetData.push({
+        rowData: data[i],
+        masterRowIndex: i + 2
+      });
+    }
+  }
+  
+  // 2. 만약 체크된 기기가 하나도 없는 경우: 전체 기기 인쇄 여부 확인
+  if (targetData.length === 0) {
+    var confirmAll = ui.alert(
+      "인쇄 대상 기기 확인",
+      "체크된 기기가 없습니다. 마스터 시트의 [전체 기기]를 대상으로 인쇄용 라벨을 생성하시겠습니까?\n\n" +
+      "(취소를 선택하면 작업이 중단되며, 기존 라벨 시트의 내용이 보존됩니다.)",
+      ui.ButtonSet.OK_CANCEL
+    );
+    
+    if (confirmAll !== ui.Button.OK) {
+      ss.toast("라벨 생성이 취소되었습니다. 출력할 기기를 선택하고 다시 실행해 주세요.", "시스템 알림");
+      return;
+    }
+    
+    // 전체 기기를 대상으로 라벨링 리스트 채움
+    for (var i = 0; i < data.length; i++) {
+      var id = data[i][idCol - 1];
+      if (id) {
+        targetData.push({
+          rowData: data[i],
+          masterRowIndex: i + 2
+        });
+      }
+    }
+  }
+  
   var settings = getSettings_();
   var schoolName = settings.schoolName || "비아초등학교";
+  var webAppUrl = settings.webAppUrl;
+  var hasGeneratedQr = false;
+  
+  // 3. 인쇄 대상 중 QR링크가 누락된 기기 자동 감지 및 발급
+  for (var idx = 0; idx < targetData.length; idx++) {
+    var item = targetData[idx];
+    var qrLinkVal = item.rowData[qrLinkCol - 1].toString().trim();
+    var id = item.rowData[idCol - 1].toString().trim();
+    
+    if (!qrLinkVal) {
+      if (!webAppUrl || webAppUrl.indexOf("http") !== 0 || webAppUrl.indexOf("배포ID") !== -1) {
+        throw new Error("[설정] 시트에서 '웹앱URL'을 실제 주소로 정상 수정하여 입력해야 새로운 기기의 QR을 발급할 수 있습니다.");
+      }
+      
+      var finalQrLink = webAppUrl + (webAppUrl.indexOf("?") === -1 ? "?" : "&") + "id=" + encodeURIComponent(id);
+      
+      // 마스터 시트 즉시 기입
+      masterSheet.getRange(item.masterRowIndex, qrLinkCol).setValue(finalQrLink);
+      
+      var cellA1 = masterSheet.getRange(item.masterRowIndex, qrLinkCol).getA1Notation();
+      var formula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=" & ENCODEURL(' + cellA1 + '))';
+      masterSheet.getRange(item.masterRowIndex, qrImgCol).setFormula(formula);
+      
+      // 메모리 내 배열 값 동기화
+      item.rowData[qrLinkCol - 1] = finalQrLink;
+      hasGeneratedQr = true;
+    }
+  }
+  
+  if (hasGeneratedQr) {
+    ss.toast("신규 기기의 누락된 QR코드를 자동 생성하여 마스터 시트에 반영했습니다.", "시스템 알림");
+  }
+  
+  var activeLabelCount = targetData.length;
+  
+  // 필요한 행과 열 확보 및 초과 영역 제거하여 Out of Bounds 에러 방지
+  var requiredRows = getRequiredRowsForLabels_(activeLabelCount);
+  if (requiredRows > 0) {
+    var maxRows = labelSheet.getMaxRows();
+    if (maxRows < requiredRows) {
+      labelSheet.insertRowsAfter(maxRows, requiredRows - maxRows);
+    } else if (maxRows > requiredRows) {
+      labelSheet.deleteRows(requiredRows + 1, maxRows - requiredRows);
+    }
+  }
+  
+  var maxCols = labelSheet.getMaxColumns();
+  if (maxCols < 15) {
+    labelSheet.insertColumnsAfter(maxCols, 15 - maxCols);
+  } else if (maxCols > 15) {
+    labelSheet.deleteColumns(16, maxCols - 15);
+  }
   
   // 1. 여백 및 격자 너비(Column Width) 정비 (크롬 기본 인쇄 여백 17.78mm 고려한 뺄셈 설계)
   // Column A: 좌측 페이지 여백 (크롬 17.78mm 선적용으로 최소 1px)
@@ -1221,8 +1559,9 @@ function createLabelSheet() {
   // 그리드 라인 표시 설정 (false를 지정하여 숨김 해제 = 눈금선 표시)
   labelSheet.setHiddenGridlines(false);
   
-  for (var i = 0; i < data.length; i++) {
-    var rowData = data[i];
+  for (var i = 0; i < targetData.length; i++) {
+    var item = targetData[i];
+    var rowData = item.rowData;
     var id = rowData[idCol - 1];
     var type = rowData[typeCol - 1];
     // 설정 시트의 관리자이름(managerName)이 존재할 경우 일괄 덮어쓰기 적용 (오차 보호막)
@@ -1239,8 +1578,9 @@ function createLabelSheet() {
       labelSheet.getRange(bottomPaddingRow, 1, 1, 15).clearFormat();
       
       // 2. 다음 페이지 상단 여백 행 (공식 20.5mm - 크롬기본 19.05mm = 1.45mm ≈ 5px)
+      // 2페이지부터 윗 여백 1.8mm (약 7px) 추가 요청 반영: 5px + 7px = 12px -> 3px 추가 후 1px 축소하여 14px -> 7px 축소하여 7px -> 다시 1.5mm(약 6px) 늘려 13px -> 1mm(약 4px) 줄여 9px -> 0.5mm(약 2px) 늘려 11px -> 1px 추가하여 최종 12px -> 1px 미세 조정을 위해 10px로 조정 (pt 반올림 임계값 돌파 시도)
       var nextTopPaddingRow = curRow + 1;
-      labelSheet.setRowHeight(nextTopPaddingRow, 5);
+      labelSheet.setRowHeight(nextTopPaddingRow, 10);
       labelSheet.getRange(nextTopPaddingRow, 1, 1, 15).clearFormat();
       
       curRow += 2; // 여백 행 2개 추가분 증가
@@ -1335,7 +1675,8 @@ function createLabelSheet() {
     labelSheet.getRange(r+4, cc+1).setValue(mParts.title)
       .setFontSize(9)
       .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle");
+      .setVerticalAlignment("middle")
+      .setWrap(true);
     labelSheet.getRange(r+4, cc+2).setValue(mParts.name)
       .setFontSize(10)
       .setHorizontalAlignment("center")
@@ -1353,14 +1694,15 @@ function createLabelSheet() {
     labelSheet.getRange(r+5, cc+1).setValue(oParts.title)
       .setFontSize(9)
       .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle");
+      .setVerticalAlignment("middle")
+      .setWrap(true);
     labelSheet.getRange(r+5, cc+2).setValue(oParts.name)
       .setFontSize(10)
       .setHorizontalAlignment("center")
       .setVerticalAlignment("middle");
       
     // 8. QR코드 (F3:F5 또는 M3:M5 병합하여 차트 API 적용, 여백 chld=L|2 옵션 추가)
-    var masterRowIndex = i + 2;
+    var masterRowIndex = item.masterRowIndex;
     var masterCellA1 = masterSheet.getRange(masterRowIndex, qrLinkCol).getA1Notation();
     var qrFormula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=" & ENCODEURL(\'마스터\'!' + masterCellA1 + '))';
     
@@ -1379,6 +1721,19 @@ function createLabelSheet() {
   // 시트 활성화 및 완성 알림 (무한 대기 시간초과 방지 위해 toast 처리)
   labelSheet.activate();
   ss.toast("라벨 시트 생성 완료: '기기관리라벨' 시트에 애니라벨 10칸(88.9mm x 52mm) 규격 및 안전 여백이 적용된 라벨 배치가 완료되었습니다. 구글 스프레드시트의 인쇄 기능(Ctrl + P)을 사용하여 A4 라벨지에 인쇄해 주십시오.", "시스템 알림");
+  
+  // 4. 출력 완료 후 체크박스 일괄 해제 확인 팝업
+  var uncheckConfirm = ui.alert(
+    "인쇄 대상 체크박스 초기화",
+    "라벨 생성이 완료되었습니다.\n마스터 시트의 인쇄 대상 체크박스를 모두 해제하시겠습니까?",
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (uncheckConfirm === ui.Button.YES) {
+    uncheckAllPrintLabels();
+  } else {
+    ss.toast("라벨 인쇄 대상 체크 상태가 유지되었습니다.", "시스템 알림");
+  }
 }
 
 /**
@@ -1396,4 +1751,150 @@ function splitNameAndTitle_(value) {
     return { title: parts[0], name: parts.slice(1).join(" ") };
   }
   return { title: "교사", name: value }; // 직위가 명시되지 않은 경우 기본값으로 '교사' 사용
+}
+
+/**
+ * 라벨 개수에 따라 필요한 총 행(row) 수를 계산하는 함수
+ * @param {number} numLabels - 출력할 라벨 개수
+ * @return {number} 필요한 총 행 수
+ */
+function getRequiredRowsForLabels_(numLabels) {
+  if (numLabels <= 0) return 0;
+  var curRow = 2;
+  var maxRow = 2;
+  for (var idx = 0; idx < numLabels; idx++) {
+    if (idx > 0 && idx % 10 === 0) {
+      curRow += 2;
+    }
+    var r = curRow;
+    var lastRowOfThisLabel = r + 6;
+    if (lastRowOfThisLabel > maxRow) {
+      maxRow = lastRowOfThisLabel;
+    }
+    if (idx % 2 === 1) {
+      curRow += 7;
+    }
+  }
+  return maxRow;
+}
+
+/**
+ * 스프레드시트가 열릴 때 자동으로 실행되어 상단 메뉴바에 커스텀 메뉴를 추가하는 트리거 함수
+ */
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu("기자재 시스템")
+    .addItem("라벨 인쇄 전체 선택", "checkAllPrintLabels")
+    .addItem("라벨 인쇄 전체 해제", "uncheckAllPrintLabels")
+    .addSeparator()
+    .addItem("QR 링크 및 이미지 갱신", "refreshQrLinks")
+    .addItem("기기관리 라벨지 출력 생성", "createLabelSheet")
+    .addSeparator()
+    .addItem("기존 마스터 시트 업그레이드", "upgradeMasterSheet")
+    .addToUi();
+}
+
+/**
+ * 마스터 시트의 모든 기기에 대해 라벨인쇄 체크박스를 선택(true)하는 함수
+ */
+function checkAllPrintLabels() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("마스터");
+  if (!sheet) {
+    throw new Error("마스터 시트를 찾을 수 없습니다.");
+  }
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return; // 데이터가 없으면 즉시 종료
+  }
+  
+  var headerMapping = getHeaderMapping_(sheet);
+  var printCol = headerMapping["라벨인쇄"];
+  if (!printCol) {
+    throw new Error("마스터 시트에 '라벨인쇄' 헤더가 존재하지 않습니다.");
+  }
+  
+  sheet.getRange(2, printCol, lastRow - 1, 1).setValue(true);
+  ss.toast("모든 기기의 라벨인쇄 대상 체크가 완료되었습니다.", "시스템 알림");
+}
+
+/**
+ * 마스터 시트의 모든 기기에 대해 라벨인쇄 체크박스를 해제(false)하는 함수
+ */
+function uncheckAllPrintLabels() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("마스터");
+  if (!sheet) {
+    throw new Error("마스터 시트를 찾을 수 없습니다.");
+  }
+  
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return;
+  }
+  
+  var headerMapping = getHeaderMapping_(sheet);
+  var printCol = headerMapping["라벨인쇄"];
+  if (!printCol) {
+    throw new Error("마스터 시트에 '라벨인쇄' 헤더가 존재하지 않습니다.");
+  }
+  
+  sheet.getRange(2, printCol, lastRow - 1, 1).setValue(false);
+  ss.toast("모든 기기의 라벨인쇄 대상 체크가 해제되었습니다.", "시스템 알림");
+}
+
+/**
+ * 기존 마스터 시트 데이터를 안전하게 보존하면서 '라벨인쇄' 체크박스 열만 추가해주는 마이그레이션 함수
+ */
+function upgradeMasterSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("마스터");
+  var ui = SpreadsheetApp.getUi();
+  
+  if (!sheet) {
+    ui.alert("오류", "마스터 시트를 찾을 수 없습니다. setupSheets()를 먼저 실행하여 초기화해주세요.", ui.ButtonSet.OK);
+    return;
+  }
+  
+  var lastCol = sheet.getLastColumn();
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  
+  // 이미 헤더가 존재하는지 확인
+  var printColIdx = -1;
+  var notesColIdx = -1;
+  for (var i = 0; i < headers.length; i++) {
+    var h = headers[i].toString().trim();
+    if (h === "라벨인쇄") {
+      printColIdx = i + 1;
+    } else if (h === "비고") {
+      notesColIdx = i + 1;
+    }
+  }
+  
+  if (printColIdx > 0) {
+    ui.alert("알림", "이미 마스터 시트에 '라벨인쇄' 열이 구성되어 있습니다.", ui.ButtonSet.OK);
+    return;
+  }
+  
+  // 비고 열 바로 다음에 라벨인쇄 열 삽입
+  var targetCol = notesColIdx > 0 ? notesColIdx + 1 : 11; // 비고가 없으면 기본 K열(11번째)로 설정
+  
+  // 1. 열 삽입 (기존의 우측 열 데이터들이 안전하게 한 칸씩 오른쪽으로 밀림)
+  sheet.insertColumnBefore(targetCol);
+  
+  // 2. 헤더 작성
+  sheet.getRange(1, targetCol).setValue("라벨인쇄")
+    .setFontWeight("bold")
+    .setBackground("#f3f4f6")
+    .setHorizontalAlignment("center");
+  
+  // 3. 체크박스 규칙 주입
+  var lastRow = sheet.getLastRow();
+  var range = sheet.getRange(2, targetCol, lastRow >= 2 ? lastRow - 1 : 1, 1);
+  var rule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  range.setDataValidation(rule);
+  range.setValue(false); // 기본값 설정
+  
+  ui.alert("성공", "기존 데이터를 보존한 채 '라벨인쇄' 체크박스 열이 성공적으로 추가되었습니다!\n\n새로고침 없이 상단 메뉴에서 바로 사용 가능합니다.", ui.ButtonSet.OK);
 }
