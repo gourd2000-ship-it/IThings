@@ -1789,8 +1789,6 @@ function onOpen() {
     .addSeparator()
     .addItem("QR 링크 및 이미지 갱신", "refreshQrLinks")
     .addItem("기기관리 라벨지 출력 생성", "createLabelSheet")
-    .addSeparator()
-    .addItem("기존 마스터 시트 업그레이드", "upgradeMasterSheet")
     .addToUi();
 }
 
