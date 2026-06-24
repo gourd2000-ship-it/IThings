@@ -1676,6 +1676,8 @@ function createHtml_(device, settings) {
         printSec.innerHTML = '';
         
         const printCount = Math.min(cart.length, 10);
+        const imagePromises = [];
+        
         for (let i = 0; i < printCount; i++) {
           const item = cart[i];
           const labelDiv = document.createElement('div');
@@ -1696,8 +1698,23 @@ function createHtml_(device, settings) {
           const qrData = item['QR링크'] || (settings.webAppUrl + '?id=' + encodeURIComponent(item['관리번호']));
           const qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=' + encodeURIComponent(qrData);
           
-          labelDiv.innerHTML = '<div class="label-details">' +
-              '<div class="label-title">' + item['관리번호'] + '</div>' +
+          // QR 이미지 프리로딩을 감시하기 위해 이미지 객체를 자바스크립트로 생성하여 로드 대기
+          const img = document.createElement('img');
+          img.alt = 'QR';
+          
+          const imgPromise = new Promise((resolve) => {
+            img.onload = () => resolve();
+            img.onerror = () => {
+              console.warn('QR 이미지 로드 실패, 계속 진행:', qrSrc);
+              resolve(); // 실패해도 다운로드가 정지되지 않도록 복구
+            };
+          });
+          img.src = qrSrc;
+          imagePromises.push(imgPromise);
+          
+          const detailsDiv = document.createElement('div');
+          detailsDiv.className = 'label-details';
+          detailsDiv.innerHTML = '<div class="label-title">' + item['관리번호'] + '</div>' +
               '<div class="label-row">' +
                 '<span class="label-key">품명:</span>' +
                 '<span class="label-val">' + item['종류'] + ' (' + (item['모델명'] || '-') + ')</span>' +
@@ -1709,44 +1726,67 @@ function createHtml_(device, settings) {
               '<div class="label-row">' +
                 '<span class="label-key">담당:</span>' +
                 '<span class="label-val">' + (item['취급자'] || '-') + '</span>' +
-              '</div>' +
-            '</div>' +
-            '<div class="label-qr">' +
-              '<img src="' + qrSrc + '" alt="QR" />' +
-            '</div>';
+              '</div>';
+              
+          const qrContainer = document.createElement('div');
+          qrContainer.className = 'label-qr';
+          qrContainer.appendChild(img);
+          
+          labelDiv.appendChild(detailsDiv);
+          labelDiv.appendChild(qrContainer);
           printSec.appendChild(labelDiv);
         }
-        
-        const originalDisplay = printSec.style.display;
-        printSec.style.display = 'block';
-        
-        const opt = {
-          margin:       0,
-          filename:     'ithings_labels_' + new Date().toISOString().slice(0, 10) + '.pdf',
-          image:        { type: 'jpeg', quality: 0.98 },
-          html2canvas:  { 
-            scale: 2, 
-            useCORS: true, 
-            letterRendering: true,
-            width: 794,
-            windowWidth: 794
-          },
-          jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
-        };
         
         const pdfBtn = event.currentTarget;
         const originalText = pdfBtn.innerText;
         pdfBtn.disabled = true;
         pdfBtn.innerText = '생성 중...';
         
-        html2pdf().set(opt).from(printSec).save().then(() => {
-          printSec.style.display = originalDisplay;
-          pdfBtn.disabled = false;
-          pdfBtn.innerText = originalText;
+        // 모든 QR 이미지 로딩 완료가 보장된 후 PDF 렌더링 시작
+        Promise.all(imagePromises).then(() => {
+          const originalDisplay = printSec.style.display;
+          const originalPosition = printSec.style.position;
+          const originalZIndex = printSec.style.zIndex;
+          
+          // 캡처하는 동안 요소를 일시적으로 보임 처리하여 html2canvas 렌더링 누락 차단
+          printSec.style.display = 'block';
+          printSec.style.position = 'fixed';
+          printSec.style.zIndex = '9999';
+          
+          const opt = {
+            margin:       0,
+            filename:     'ithings_labels_' + new Date().toISOString().slice(0, 10) + '.pdf',
+            image:        { type: 'jpeg', quality: 0.98 },
+            html2canvas:  { 
+              scale: 2, 
+              useCORS: true, 
+              letterRendering: true,
+              width: 794,
+              windowWidth: 794
+            },
+            jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+          };
+          
+          // 브라우저가 변경된 fixed 레이아웃을 갱신(Reflow)할 시간을 조금 벌어준 뒤 캡처 실행
+          setTimeout(() => {
+            html2pdf().set(opt).from(printSec).save().then(() => {
+              printSec.style.display = originalDisplay;
+              printSec.style.position = originalPosition;
+              printSec.style.zIndex = originalZIndex;
+              pdfBtn.disabled = false;
+              pdfBtn.innerText = originalText;
+            }).catch(err => {
+              console.error('PDF generation error:', err);
+              alert('PDF 생성에 실패했습니다: ' + err.toString());
+              printSec.style.display = originalDisplay;
+              printSec.style.position = originalPosition;
+              printSec.style.zIndex = originalZIndex;
+              pdfBtn.disabled = false;
+              pdfBtn.innerText = originalText;
+            });
+          }, 150);
         }).catch(err => {
-          console.error('PDF generation error:', err);
-          alert('PDF 생성에 실패했습니다: ' + err.toString());
-          printSec.style.display = originalDisplay;
+          console.error('PDF preloading promises failed:', err);
           pdfBtn.disabled = false;
           pdfBtn.innerText = originalText;
         });
