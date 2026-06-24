@@ -33,6 +33,28 @@ function doGet(e) {
   if (id === "DEBUG_TEST") {
     try {
       var ss = SpreadsheetApp.getActiveSpreadsheet();
+      var settingsSheet = ss.getSheetByName("설정");
+      var action = e.parameter.action;
+      if (action === "lock" || action === "unlock") {
+        if (settingsSheet) {
+          var lastRow = settingsSheet.getLastRow();
+          var found = false;
+          if (lastRow >= 2) {
+            var values = settingsSheet.getRange(2, 1, lastRow - 1, 2).getValues();
+            for (var i = 0; i < values.length; i++) {
+              if (values[i][0].toString().trim() === "모든입력잠금") {
+                settingsSheet.getRange(i + 2, 2).setValue(action === "lock" ? "Y" : "N");
+                found = true;
+                break;
+              }
+            }
+          }
+          if (!found) {
+            settingsSheet.appendRow(["모든입력잠금", action === "lock" ? "Y" : "N"]);
+          }
+          SpreadsheetApp.flush();
+        }
+      }
       var sheet = ss.getSheetByName("마스터");
       var ids = [];
       if (sheet) {
@@ -133,6 +155,7 @@ function getSettings_() {
     deviceTypes: ["PC", "노트북", "프린터", "3D프린터", "TV", "모니터", "태블릿", "기타"],
     pcSensitiveEditAllowed: false,
     basicInfoEditAllowed: false,
+    allEditLocked: false,
     schoolName: "비아초등학교",
     managerName: "교사 이영희"
   };
@@ -166,6 +189,8 @@ function getSettings_() {
       defaultSettings.schoolName = val;
     } else if (key === "관리자이름") {
       defaultSettings.managerName = val;
+    } else if (key === "모든입력잠금") {
+      defaultSettings.allEditLocked = (val.toUpperCase() === "Y" || val.toUpperCase() === "TRUE");
     }
   }
   
@@ -303,6 +328,15 @@ function getDeviceById_(id) {
  * @return {Object} 처리 성공 상태 및 메시지 객체
  */
 function updateDevice(id, formData) {
+  // [보안] 모든 입력 잠금이 활성화되어 있는 경우, 저장 요청 즉시 차단
+  var settings = getSettings_();
+  if (settings.allEditLocked) {
+    return {
+      success: false,
+      message: "저장 실패: 현재 시스템이 입력 잠금 상태이므로 수정 내용을 저장할 수 없습니다."
+    };
+  }
+
   // 동시 쓰기 작업 시 데이터 유실 방지를 위한 Lock 서비스 획득
   var lock = LockService.getScriptLock();
   try {
@@ -433,6 +467,8 @@ function createHtml_(device, settings) {
     <title>기자재 정보 수정</title>
     <!-- 고급 폰트 적용 (Outfit / Noto Sans KR) -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <!-- PDF 저장을 위한 html2pdf.js 라이브러리 추가 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
       :root {
         --bg-color: #0b0f19;
@@ -731,6 +767,275 @@ function createHtml_(device, settings) {
         margin-bottom: 18px;
         text-align: left;
       }
+      .lock-banner {
+        display: none;
+        background: rgba(245, 158, 11, 0.1);
+        border: 1px solid rgba(245, 158, 11, 0.25);
+        color: #fef08a;
+        padding: 14px 18px;
+        border-radius: 16px;
+        font-size: 13.5px;
+        line-height: 1.5;
+        margin-bottom: 18px;
+        align-items: center;
+        gap: 12px;
+        text-align: left;
+        animation: fadeIn 0.4s ease-out;
+      }
+      
+      /* 플로팅 버튼 (FAB) */
+      .fab-container {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        z-index: 1000;
+      }
+      .fab-btn {
+        background: var(--primary-gradient);
+        border: none;
+        border-radius: 50px;
+        color: white;
+        padding: 12px 18px;
+        font-family: var(--font-family);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 10px 25px rgba(99, 102, 241, 0.4);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        outline: none;
+      }
+      .fab-btn:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 15px 30px rgba(99, 102, 241, 0.5);
+      }
+      .fab-btn.cart-add {
+        background: var(--success-gradient);
+        box-shadow: 0 10px 25px rgba(16, 185, 129, 0.4);
+      }
+      .fab-btn.cart-add:hover {
+        box-shadow: 0 15px 30px rgba(16, 185, 129, 0.5);
+      }
+      
+      /* 모달 배경 */
+      .modal-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(11, 15, 25, 0.8);
+        backdrop-filter: blur(8px);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 1100;
+        opacity: 0;
+        transition: opacity 0.25s ease;
+      }
+      .modal-backdrop.active {
+        display: flex;
+        opacity: 1;
+      }
+      /* 모달 카드 */
+      .modal-card {
+        width: 90%;
+        max-width: 400px;
+        background: #161c2d;
+        border: 1px solid var(--card-border);
+        border-radius: 24px;
+        padding: 24px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+        display: flex;
+        flex-direction: column;
+        max-height: 80vh;
+        animation: modalFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      @keyframes modalFadeIn {
+        from { transform: scale(0.95); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+      }
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 18px;
+      }
+      .modal-title {
+        font-size: 17px;
+        font-weight: 700;
+        color: var(--text-color);
+      }
+      .modal-close {
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        font-size: 24px;
+        cursor: pointer;
+        outline: none;
+      }
+      /* 보관함 목록 */
+      .cart-list {
+        overflow-y: auto;
+        flex-grow: 1;
+        margin-bottom: 20px;
+        max-height: 350px;
+      }
+      .cart-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 14px;
+        padding: 12px 16px;
+        margin-bottom: 10px;
+      }
+      .cart-item-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        cursor: pointer;
+        flex-grow: 1;
+        text-align: left;
+      }
+      .cart-item-info:hover {
+        opacity: 0.8;
+      }
+      .cart-item-id {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: #a5b4fc;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .cart-item-id::after {
+        content: "🔗";
+        font-size: 9px;
+      }
+      .cart-item-meta {
+        font-size: 11.5px;
+        color: var(--text-muted);
+      }
+      .cart-item-delete {
+        background: transparent;
+        border: none;
+        color: #f87171;
+        cursor: pointer;
+        padding: 4px;
+        font-size: 20px;
+        outline: none;
+      }
+      .cart-empty {
+        text-align: center;
+        color: var(--text-muted);
+        padding: 40px 0;
+        font-size: 13.5px;
+      }
+      .modal-footer {
+        display: flex;
+        gap: 10px;
+      }
+      
+      /* --- 인쇄 전용 그리드 및 인쇄 CSS (PDF 변환 시에도 2x5 레이아웃 유지) --- */
+      #print-section {
+        display: none;
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 210mm;
+        height: 297mm;
+        box-sizing: border-box;
+        background: white !important;
+        color: black !important;
+      }
+      .print-label {
+        border: 1px dashed #ccc !important;
+        border-radius: 6px;
+        padding: 3mm 4mm;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-sizing: border-box;
+        background: white !important;
+        overflow: hidden;
+      }
+      .label-details {
+        display: flex;
+        flex-direction: column;
+        gap: 1mm;
+        flex-grow: 1;
+        color: black !important;
+        text-align: left;
+        overflow: hidden;
+      }
+      .label-title {
+        font-size: 11pt;
+        font-weight: bold;
+        color: #1a202c !important;
+        border-bottom: 2px solid #2d3748 !important;
+        padding-bottom: 0.5mm;
+        margin-bottom: 1mm;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .label-row {
+        font-size: 8.5pt;
+        display: flex;
+        align-items: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .label-key {
+        font-weight: bold;
+        width: 11mm;
+        color: #4a5568 !important;
+        flex-shrink: 0;
+      }
+      .label-val {
+        color: #2d3748 !important;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .label-qr {
+        width: 24mm;
+        height: 24mm;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-left: 2mm;
+        flex-shrink: 0;
+      }
+      .label-qr img {
+        width: 100%;
+        height: 100%;
+      }
+      
+      @media print {
+        body * {
+          visibility: hidden !important;
+        }
+        #print-section, #print-section * {
+          visibility: visible !important;
+        }
+        #print-section {
+          display: block !important;
+          position: fixed !important;
+          left: 0 !important;
+          top: 0 !important;
+          width: 210mm !important;
+          height: 297mm !important;
+          background: white !important;
+        }
+      }
     </style>
   </head>
   <body>
@@ -744,6 +1049,7 @@ function createHtml_(device, settings) {
         </header>
         
         <div class="error-alert" id="error-box"></div>
+        <div id="lock-banner" class="lock-banner"></div>
         
         <div class="section-title">기기 기본 정보</div>
         <div class="info-grid">
@@ -853,6 +1159,35 @@ function createHtml_(device, settings) {
         <button class="btn btn-secondary" onclick="showForm()">다시 수정하기</button>
       </div>
     </div>
+    
+    <!-- 플로팅 버튼 영역 -->
+    <div class="fab-container">
+      <button class="fab-btn cart-add" id="fab-add-btn" onclick="addToCart()">
+        <span>📥 보관함 담기</span>
+      </button>
+      <button class="fab-btn" id="fab-view-btn" onclick="openCartModal()">
+        <span>🛒 보관함 보기 (<span id="cart-count">0</span>)</span>
+      </button>
+    </div>
+
+    <!-- 보관함 모달창 -->
+    <div class="modal-backdrop" id="cart-modal" onclick="closeCartModalOnBackdrop(event)">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="modal-title">라벨 인쇄 보관함</div>
+          <button class="modal-close" onclick="closeCartModal()">&times;</button>
+        </div>
+        <div class="cart-list" id="cart-items-container"></div>
+        <div class="modal-footer" style="flex-wrap: wrap; gap: 8px;">
+          <button class="btn btn-secondary" style="flex: 1 1 30%; padding: 10px 8px; font-size: 12.5px;" onclick="clearCart()">전체비우기</button>
+          <button class="btn btn-secondary" style="flex: 1 1 30%; padding: 10px 8px; font-size: 12.5px; background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.3); color: #a5b4fc;" onclick="saveCartAsPdf(event)">PDF 저장</button>
+          <button class="btn" style="flex: 1 1 90%; padding: 10px 8px; font-size: 12.5px;" onclick="printCartLabels()">모아 인쇄</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 인쇄 전용 그리드 영역 -->
+    <div id="print-section"></div>
     
     <script>
       // 서버에서 주입한 기기 정보와 설정 파일 로딩
@@ -1108,6 +1443,317 @@ function createHtml_(device, settings) {
       // 설치장소 및 취급자 입력창에 자동 펼침 리스너 바인딩
       bindAutoPicker("location");
       bindAutoPicker("manager");
+      
+      // 모든 입력 잠금 상태 처리 (프론트엔드 요소 전체 비활성화)
+      if (settings.allEditLocked) {
+        const banner = document.getElementById("lock-banner");
+        if (banner) {
+          banner.innerHTML = '<svg viewBox="0 0 24 24" style="width:20px; height:20px; fill:#f59e0b; flex-shrink:0;"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg><span>현재 시스템이 입력 잠금 상태입니다. 정보 조회만 가능하며 정보 수정은 불가능합니다.</span>';
+          banner.style.display = "flex";
+        }
+        
+        // 모든 입력 필드 비활성화
+        const inputIds = ["location", "manager", "notes", "ip", "password1st", "password2nd", "type", "brand", "model", "date"];
+        inputIds.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) {
+            el.disabled = true;
+            el.style.opacity = "0.6";
+            el.style.cursor = "not-allowed";
+          }
+        });
+        
+        // 저장 버튼 비활성화 및 레이블 변경
+        const submitBtn = document.getElementById("submit-btn");
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.style.opacity = "0.5";
+          submitBtn.style.cursor = "not-allowed";
+          submitBtn.style.boxShadow = "none";
+          submitBtn.style.background = "var(--input-border)";
+        }
+        const btnText = document.getElementById("btn-text");
+        if (btnText) {
+          btnText.innerText = "수정 잠금 활성화됨";
+        }
+      }
+      
+      // --- 라벨 보관함 및 모아 인쇄 비즈니스 로직 ---
+      const CART_KEY = 'ithings_print_cart';
+      
+      function getCart() {
+        try {
+          const raw = localStorage.getItem(CART_KEY);
+          return raw ? JSON.parse(raw) : [];
+        } catch(e) {
+          return [];
+        }
+      }
+      
+      function saveCart(cart) {
+        try {
+          localStorage.setItem(CART_KEY, JSON.stringify(cart));
+        } catch(e) {}
+        updateCartButtons();
+      }
+      
+      function updateCartButtons() {
+        const cart = getCart();
+        const countEl = document.getElementById('cart-count');
+        if (countEl) {
+          countEl.innerText = cart.length;
+        }
+      }
+      
+      function addToCart() {
+        const cart = getCart();
+        const exists = cart.some(item => item['관리번호'] === device['관리번호']);
+        if (exists) {
+          alert('이미 보관함에 담겨 있는 기기입니다.');
+          return;
+        }
+        
+        // 현재 화면에 입력된 최신 필드 값을 가져와 기기 데이터와 합성
+        const updatedItem = {
+          '관리번호': device['관리번호'],
+          '종류': document.getElementById('type') ? document.getElementById('type').value : (device['종류'] || '기타'),
+          '설치장소': document.getElementById('location') ? document.getElementById('location').value : (device['설치장소'] || ''),
+          '취급자': document.getElementById('manager') ? document.getElementById('manager').value : (device['취급자'] || ''),
+          '비고': document.getElementById('notes') ? document.getElementById('notes').value : (device['비고'] || ''),
+          '제조사': document.getElementById('brand') ? document.getElementById('brand').value : (device['제조사'] || ''),
+          '모델명': document.getElementById('model') ? document.getElementById('model').value : (device['모델명'] || ''),
+          '도입일자': document.getElementById('date') ? document.getElementById('date').value : (device['도입일자'] || ''),
+          'QR링크': device['QR링크'] || (settings.webAppUrl + '?id=' + encodeURIComponent(device['관리번호']))
+        };
+        
+        cart.push(updatedItem);
+        saveCart(cart);
+        alert('보관함에 기기를 추가했습니다.');
+      }
+      
+      function openCartModal() {
+        const modal = document.getElementById('cart-modal');
+        if (modal) {
+          renderCartItems();
+          modal.classList.add('active');
+        }
+      }
+      
+      function closeCartModal() {
+        const modal = document.getElementById('cart-modal');
+        if (modal) {
+          modal.classList.remove('active');
+        }
+      }
+      
+      function closeCartModalOnBackdrop(e) {
+        if (e.target === document.getElementById('cart-modal')) {
+          closeCartModal();
+        }
+      }
+      
+      function renderCartItems() {
+        const cart = getCart();
+        const container = document.getElementById('cart-items-container');
+        if (!container) return;
+        
+        container.innerHTML = '';
+        
+        if (cart.length === 0) {
+          container.innerHTML = '<div class="cart-empty">보관함이 비어 있습니다.</div>';
+          return;
+        }
+        
+        cart.forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'cart-item';
+          
+          const detailUrl = settings.webAppUrl + '?id=' + encodeURIComponent(item['관리번호']);
+          
+          div.setAttribute('data-url', detailUrl);
+          div.setAttribute('data-id', item['관리번호']);
+          
+          div.innerHTML = '<div class="cart-item-info">' +
+              '<div class="cart-item-id">' + item['관리번호'] + '</div>' +
+              '<div class="cart-item-meta">' + item['종류'] + ' | ' + (item['설치장소'] || '-') + '</div>' +
+            '</div>' +
+            '<button class="cart-item-delete">&times;</button>';
+            
+          div.querySelector('.cart-item-info').onclick = function() {
+            window.location.href = div.getAttribute('data-url');
+          };
+          div.querySelector('.cart-item-delete').onclick = function() {
+            removeFromCart(div.getAttribute('data-id'));
+          };
+          
+          container.appendChild(div);
+        });
+      }
+      
+      function removeFromCart(id) {
+        let cart = getCart();
+        cart = cart.filter(item => item['관리번호'] !== id);
+        saveCart(cart);
+        renderCartItems();
+      }
+      
+      function clearCart() {
+        if (confirm('보관함을 모두 비우시겠습니까?')) {
+          saveCart([]);
+          renderCartItems();
+        }
+      }
+      
+      function printCartLabels() {
+        const cart = getCart();
+        if (cart.length === 0) {
+          alert('출력할 기기가 보관함에 없습니다.');
+          return;
+        }
+        
+        const printSec = document.getElementById('print-section');
+        if (!printSec) return;
+        
+        printSec.innerHTML = '';
+        
+        // 최대 A4 10칸 규격에 맞춰 10개까지만 출력 제한
+        const printCount = Math.min(cart.length, 10);
+        
+        for (let i = 0; i < printCount; i++) {
+          const item = cart[i];
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'print-label';
+          
+          // 2열 5행 절대 좌표 계산
+          const col = i % 2;
+          const row = Math.floor(i / 2);
+          const leftPos = 9 + col * (77 + 20);
+          const topPos = [19, 69, 121, 173, 225][row];
+          
+          labelDiv.style.position = 'absolute';
+          labelDiv.style.left = leftPos + 'mm';
+          labelDiv.style.top = topPos + 'mm';
+          labelDiv.style.width = '77mm';
+          labelDiv.style.height = '40mm';
+          
+          const qrData = item['QR링크'] || (settings.webAppUrl + '?id=' + encodeURIComponent(item['관리번호']));
+          const qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=' + encodeURIComponent(qrData);
+          
+          labelDiv.innerHTML = '<div class="label-details">' +
+              '<div class="label-title">' + item['관리번호'] + '</div>' +
+              '<div class="label-row">' +
+                '<span class="label-key">품명:</span>' +
+                '<span class="label-val">' + item['종류'] + ' (' + (item['모델명'] || '-') + ')</span>' +
+              '</div>' +
+              '<div class="label-row">' +
+                '<span class="label-key">장소:</span>' +
+                '<span class="label-val">' + (item['설치장소'] || '-') + '</span>' +
+              '</div>' +
+              '<div class="label-row">' +
+                '<span class="label-key">담당:</span>' +
+                '<span class="label-val">' + (item['취급자'] || '-') + '</span>' +
+              '</div>' +
+            '</div>' +
+            '<div class="label-qr">' +
+              '<img src="' + qrSrc + '" alt="QR" />' +
+            '</div>';
+          printSec.appendChild(labelDiv);
+        }
+        
+        window.print();
+      }
+      
+      function saveCartAsPdf(event) {
+        const cart = getCart();
+        if (cart.length === 0) {
+          alert('출력할 기기가 보관함에 없습니다.');
+          return;
+        }
+        
+        const printSec = document.getElementById('print-section');
+        if (!printSec) return;
+        
+        printSec.innerHTML = '';
+        
+        const printCount = Math.min(cart.length, 10);
+        for (let i = 0; i < printCount; i++) {
+          const item = cart[i];
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'print-label';
+          
+          // 2열 5행 절대 좌표 계산
+          const col = i % 2;
+          const row = Math.floor(i / 2);
+          const leftPos = 9 + col * (77 + 20);
+          const topPos = [19, 69, 121, 173, 225][row];
+          
+          labelDiv.style.position = 'absolute';
+          labelDiv.style.left = leftPos + 'mm';
+          labelDiv.style.top = topPos + 'mm';
+          labelDiv.style.width = '77mm';
+          labelDiv.style.height = '40mm';
+          
+          const qrData = item['QR링크'] || (settings.webAppUrl + '?id=' + encodeURIComponent(item['관리번호']));
+          const qrSrc = 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=' + encodeURIComponent(qrData);
+          
+          labelDiv.innerHTML = '<div class="label-details">' +
+              '<div class="label-title">' + item['관리번호'] + '</div>' +
+              '<div class="label-row">' +
+                '<span class="label-key">품명:</span>' +
+                '<span class="label-val">' + item['종류'] + ' (' + (item['모델명'] || '-') + ')</span>' +
+              '</div>' +
+              '<div class="label-row">' +
+                '<span class="label-key">장소:</span>' +
+                '<span class="label-val">' + (item['설치장소'] || '-') + '</span>' +
+              '</div>' +
+              '<div class="label-row">' +
+                '<span class="label-key">담당:</span>' +
+                '<span class="label-val">' + (item['취급자'] || '-') + '</span>' +
+              '</div>' +
+            '</div>' +
+            '<div class="label-qr">' +
+              '<img src="' + qrSrc + '" alt="QR" />' +
+            '</div>';
+          printSec.appendChild(labelDiv);
+        }
+        
+        const originalDisplay = printSec.style.display;
+        printSec.style.display = 'block';
+        
+        const opt = {
+          margin:       0,
+          filename:     'ithings_labels_' + new Date().toISOString().slice(0, 10) + '.pdf',
+          image:        { type: 'jpeg', quality: 0.98 },
+          html2canvas:  { 
+            scale: 2, 
+            useCORS: true, 
+            letterRendering: true,
+            width: 794,
+            windowWidth: 794
+          },
+          jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+        
+        const pdfBtn = event.currentTarget;
+        const originalText = pdfBtn.innerText;
+        pdfBtn.disabled = true;
+        pdfBtn.innerText = '생성 중...';
+        
+        html2pdf().set(opt).from(printSec).save().then(() => {
+          printSec.style.display = originalDisplay;
+          pdfBtn.disabled = false;
+          pdfBtn.innerText = originalText;
+        }).catch(err => {
+          console.error('PDF generation error:', err);
+          alert('PDF 생성에 실패했습니다: ' + err.toString());
+          printSec.style.display = originalDisplay;
+          pdfBtn.disabled = false;
+          pdfBtn.innerText = originalText;
+        });
+      }
+      
+      // 초기 버튼 수 동기화
+      updateCartButtons();
     </script>
   </body>
 </html>`;
@@ -1276,6 +1922,7 @@ function setupSheets() {
     ["취급자목록", "홍길동,김철수,이영희,박민수"],
     ["PC민감정보수정허용", "N"],
     ["기본정보수정허용", "N"],
+    ["모든입력잠금", "N"],
     ["관리자이름", "교사 이영희"]
   ];
   
