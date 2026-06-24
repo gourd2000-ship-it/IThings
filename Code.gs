@@ -1697,7 +1697,7 @@ function createHtml_(device, settings) {
           // 2열 5행 절대 좌표 계산
           const col = i % 2;
           const row = Math.floor(i / 2);
-          const leftPos = 9 + col * (77 + 20);
+          const leftPos = 19 + col * (77 + 20);
           const topPos = [19, 69, 121, 173, 225][row];
           
           labelDiv.style.position = 'absolute';
