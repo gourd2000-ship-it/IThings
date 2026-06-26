@@ -2213,10 +2213,57 @@ function createLabelSheet() {
     ss.toast("신규 기기의 누락된 QR코드를 자동 생성하여 마스터 시트에 반영했습니다.", "시스템 알림");
   }
   
-  var activeLabelCount = targetData.length;
+  // 3-1. 라벨지 출력 방식 선택 다이얼로그 호출
+  var printModeConfirm = ui.alert(
+    "라벨지 출력 방식 선택",
+    "라벨지 출력 방식을 선택해 주세요.\n\n" +
+    "- [예] 취급자(사용자)별 출력 (취급자별 페이지 분할, 빈 칸 발생 가능)\n" +
+    "- [아니오] 기기별 순차 출력 (기존 방식, 빈 칸 없이 연속 출력)\n" +
+    "- [취소] 작업 중단",
+    ui.ButtonSet.YES_NO_CANCEL
+  );
+  
+  if (printModeConfirm === ui.Button.CANCEL || printModeConfirm === ui.Button.CLOSE) {
+    ss.toast("라벨지 출력이 취소되었습니다.", "시스템 알림");
+    return;
+  }
+  
+  var isGroupByOperator = (printModeConfirm === ui.Button.YES);
+  
+  var finalLabelCount = 0;
+  var grouped = {};
+  var groupOrder = [];
+  
+  if (isGroupByOperator) {
+    // 취급자별 그룹화 진행
+    for (var i = 0; i < targetData.length; i++) {
+      var item = targetData[i];
+      var operator = (item.rowData[operatorCol - 1] || "").toString().trim();
+      if (!operator) {
+        operator = "미지정";
+      }
+      if (!grouped[operator]) {
+        grouped[operator] = [];
+        groupOrder.push(operator);
+      }
+      grouped[operator].push(item);
+    }
+    
+    // 그룹별 10의 배수 올림(더미 패딩 포함)한 총 라벨 수 계산
+    for (var j = 0; j < groupOrder.length; j++) {
+      var op = groupOrder[j];
+      var groupLen = grouped[op].length;
+      if (groupLen > 0) {
+        finalLabelCount += Math.ceil(groupLen / 10) * 10;
+      }
+    }
+  } else {
+    // 기존 방식: 순차 출력
+    finalLabelCount = targetData.length;
+  }
   
   // 필요한 행과 열 확보 및 초과 영역 제거하여 Out of Bounds 에러 방지
-  var requiredRows = getRequiredRowsForLabels_(activeLabelCount);
+  var requiredRows = getRequiredRowsForLabels_(finalLabelCount);
   if (requiredRows > 0) {
     var maxRows = labelSheet.getMaxRows();
     if (maxRows < requiredRows) {
@@ -2272,163 +2319,345 @@ function createLabelSheet() {
   // 그리드 라인 표시 설정 (false를 지정하여 숨김 해제 = 눈금선 표시)
   labelSheet.setHiddenGridlines(false);
   
-  for (var i = 0; i < targetData.length; i++) {
-    var item = targetData[i];
-    var rowData = item.rowData;
-    var id = rowData[idCol - 1];
-    var type = rowData[typeCol - 1];
-    // 설정 시트의 관리자이름(managerName)이 존재할 경우 일괄 덮어쓰기 적용 (오차 보호막)
-    var manager = settings.managerName || rowData[managerCol - 1];
-    var operator = rowData[operatorCol - 1];
-    
-    if (!id) continue;
-    
-    // 10칸(5줄) 단위 페이지 경계 반복 여백 동적 삽입
-    if (labelCount > 0 && labelCount % 10 === 0) {
-      // 1. 이전 페이지 하단 여백 행 (1페이지 초과 방지를 위해 최소 1px로 여백 제거)
-      var bottomPaddingRow = curRow;
-      labelSheet.setRowHeight(bottomPaddingRow, 1);
-      labelSheet.getRange(bottomPaddingRow, 1, 1, 15).clearFormat();
+  if (!isGroupByOperator) {
+    // 기존 순차 출력 루프
+    for (var i = 0; i < targetData.length; i++) {
+      var item = targetData[i];
+      var rowData = item.rowData;
+      var id = rowData[idCol - 1];
+      var type = rowData[typeCol - 1];
+      // 설정 시트의 관리자이름(managerName)이 존재할 경우 일괄 덮어쓰기 적용 (오차 보호막)
+      var manager = settings.managerName || rowData[managerCol - 1];
+      var operator = rowData[operatorCol - 1];
       
-      // 2. 다음 페이지 상단 여백 행 (공식 20.5mm - 크롬기본 19.05mm = 1.45mm ≈ 5px)
-      // 2페이지부터 윗 여백 1.8mm (약 7px) 추가 요청 반영: 5px + 7px = 12px -> 3px 추가 후 1px 축소하여 14px -> 7px 축소하여 7px -> 다시 1.5mm(약 6px) 늘려 13px -> 1mm(약 4px) 줄여 9px -> 0.5mm(약 2px) 늘려 11px -> 1px 추가하여 최종 12px -> 1px 미세 조정을 위해 10px로 조정 (pt 반올림 임계값 돌파 시도)
-      var nextTopPaddingRow = curRow + 1;
-      labelSheet.setRowHeight(nextTopPaddingRow, 10);
-      labelSheet.getRange(nextTopPaddingRow, 1, 1, 15).clearFormat();
+      if (!id) continue;
       
-      curRow += 2; // 여백 행 2개 추가분 증가
+      // 10칸(5줄) 단위 페이지 경계 반복 여백 동적 삽입
+      if (labelCount > 0 && labelCount % 10 === 0) {
+        // 1. 이전 페이지 하단 여백 행 (1페이지 초과 방지를 위해 최소 1px로 여백 제거)
+        var bottomPaddingRow = curRow;
+        labelSheet.setRowHeight(bottomPaddingRow, 1);
+        labelSheet.getRange(bottomPaddingRow, 1, 1, 15).clearFormat();
+        
+        // 2. 다음 페이지 상단 여백 행 (공식 20.5mm - 크롬기본 19.05mm = 1.45mm ≈ 5px)
+        var nextTopPaddingRow = curRow + 1;
+        labelSheet.setRowHeight(nextTopPaddingRow, 10);
+        labelSheet.getRange(nextTopPaddingRow, 1, 1, 15).clearFormat();
+        
+        curRow += 2; // 여백 행 2개 추가분 증가
+      }
+      
+      var layout = colLayouts[labelCount % 2];
+      var r = curRow;
+      var c = layout.start;
+      var cc = layout.contentStart;
+      var qc = layout.qr;
+      
+      // 행 높이 조절
+      var isLastRowOfPage = (Math.floor((labelCount % 10) / 2) === 4);
+      if (isLastRowOfPage) {
+        labelSheet.setRowHeight(r, 5);     // 상단 안전 여백 (Row Margin)
+        labelSheet.setRowHeight(r+1, 24);  // 기관명 (학교명)
+        labelSheet.setRowHeight(r+2, 32);  // 종류
+        labelSheet.setRowHeight(r+3, 34);  // 관리 번호
+        labelSheet.setRowHeight(r+4, 34);  // 관리책임자
+        labelSheet.setRowHeight(r+5, 35);  // 취급자
+        labelSheet.setRowHeight(r+6, 6);   // 하단 안전 여백 (Row Margin)
+      } else {
+        labelSheet.setRowHeight(r, 13);    // 상단 안전 여백 (Row Margin)
+        labelSheet.setRowHeight(r+1, 28);  // 기관명 (학교명)
+        labelSheet.setRowHeight(r+2, 34);  // 종류
+        labelSheet.setRowHeight(r+3, 36);  // 관리 번호
+        labelSheet.setRowHeight(r+4, 36);  // 관리책임자
+        labelSheet.setRowHeight(r+5, 36);  // 취급자
+        labelSheet.setRowHeight(r+6, 14);  // 하단 안전 여백 (Row Margin)
+      }
+      
+      // 1. 물리적 라벨 영역 배경색 및 연한 칼선 테두리 설정 (B~G열, r~r+6행)
+      var cardRange = labelSheet.getRange(r, c, 7, 6);
+      cardRange.setBorder(true, true, true, true, false, false, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID);
+      cardRange.setBackground("#ffffff");
+      cardRange.setFontFamily("Noto Sans KR");
+      
+      // 2. 내부 데이터 표 영역 테두리 설정 (C~F열, r+1~r+5행) - 안전 여백 확보
+      var contentRange = labelSheet.getRange(r+1, cc, 5, 4);
+      contentRange.setBorder(true, true, true, true, true, true, "#475569", SpreadsheetApp.BorderStyle.SOLID);
+      
+      // 3. 기관명 (학교명)
+      var titleCell = labelSheet.getRange(r+1, cc, 1, 4);
+      titleCell.merge().setValue(schoolName)
+        .setFontWeight("bold")
+        .setFontSize(10)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setBackground("#f8fafc");
+        
+      // 4. 종류
+      labelSheet.getRange(r+2, cc).setValue("종류")
+        .setFontWeight("bold")
+        .setFontSize(9)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setBackground("#f1f5f9");
+      
+      var typeCell = labelSheet.getRange(r+2, cc+1, 1, 3);
+      typeCell.merge().setValue(type)
+        .setFontSize(10)
+        .setFontWeight("bold")
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle");
+        
+      // 5. 관리 번호
+      labelSheet.getRange(r+3, cc).setValue("관리 번호")
+        .setFontWeight("bold")
+        .setFontSize(9)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setBackground("#f1f5f9");
+        
+      var idCell = labelSheet.getRange(r+3, cc+1, 1, 2);
+      idCell.merge().setValue(id)
+        .setFontWeight("bold")
+        .setFontSize(10)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle");
+        
+      // 6. 관리책임자
+      labelSheet.getRange(r+4, cc).setValue("관리책임자")
+        .setFontWeight("bold")
+        .setFontSize(9)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setBackground("#f1f5f9");
+        
+      var mParts = splitNameAndTitle_(manager);
+      labelSheet.getRange(r+4, cc+1).setValue(mParts.title)
+        .setFontSize(9)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setWrap(true);
+      labelSheet.getRange(r+4, cc+2).setValue(mParts.name)
+        .setFontSize(10)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle");
+        
+      // 7. 취급자
+      labelSheet.getRange(r+5, cc).setValue("취급자")
+        .setFontWeight("bold")
+        .setFontSize(9)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setBackground("#f1f5f9");
+        
+      var oParts = splitNameAndTitle_(operator);
+      labelSheet.getRange(r+5, cc+1).setValue(oParts.title)
+        .setFontSize(9)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle")
+        .setWrap(true);
+      labelSheet.getRange(r+5, cc+2).setValue(oParts.name)
+        .setFontSize(10)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle");
+        
+      // 8. QR코드
+      var masterRowIndex = item.masterRowIndex;
+      var masterCellA1 = masterSheet.getRange(masterRowIndex, qrLinkCol).getA1Notation();
+      var qrFormula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=" & ENCODEURL(\'마스터\'!' + masterCellA1 + '))';
+      
+      var qrCell = labelSheet.getRange(r+3, qc, 3, 1);
+      qrCell.merge().setFormula(qrFormula)
+        .setHorizontalAlignment("center")
+        .setVerticalAlignment("middle");
+        
+      if (labelCount % 2 === 1) {
+        curRow += 7;
+      }
+      labelCount++;
     }
-    
-    var layout = colLayouts[labelCount % 2];
-    var r = curRow;
-    var c = layout.start;
-    var cc = layout.contentStart;
-    var qc = layout.qr;
-    
-    // 행 높이 조절
-    var isLastRowOfPage = (Math.floor((labelCount % 10) / 2) === 4);
-    if (isLastRowOfPage) {
-      // 5번째 줄 (9, 10칸) - A4 페이지 초과 밀림 방지를 위해 높이를 45mm(170px), 내부 표를 42mm(159px)로 축소
-      labelSheet.setRowHeight(r, 5);     // 상단 안전 여백 (Row Margin)
-      labelSheet.setRowHeight(r+1, 24);  // 기관명 (학교명)
-      labelSheet.setRowHeight(r+2, 32);  // 종류
-      labelSheet.setRowHeight(r+3, 34);  // 관리 번호
-      labelSheet.setRowHeight(r+4, 34);  // 관리책임자
-      labelSheet.setRowHeight(r+5, 35);  // 취급자
-      labelSheet.setRowHeight(r+6, 6);   // 하단 안전 여백 (Row Margin)
-    } else {
-      // 일반 줄 - 높이 52mm(197px)
-      labelSheet.setRowHeight(r, 13);    // 상단 안전 여백 (Row Margin)
-      labelSheet.setRowHeight(r+1, 28);  // 기관명 (학교명)
-      labelSheet.setRowHeight(r+2, 34);  // 종류
-      labelSheet.setRowHeight(r+3, 36);  // 관리 번호
-      labelSheet.setRowHeight(r+4, 36);  // 관리책임자
-      labelSheet.setRowHeight(r+5, 36);  // 취급자
-      labelSheet.setRowHeight(r+6, 14);  // 하단 안전 여백 (Row Margin)
+  } else {
+    // 취급자별 분할 출력 루프
+    for (var g = 0; g < groupOrder.length; g++) {
+      var op = groupOrder[g];
+      var items = grouped[op];
+      
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var rowData = item.rowData;
+        var id = rowData[idCol - 1];
+        var type = rowData[typeCol - 1];
+        var manager = settings.managerName || rowData[managerCol - 1];
+        var operator = rowData[operatorCol - 1];
+        
+        if (!id) continue;
+        
+        // 10칸(5줄) 단위 페이지 경계 반복 여백 동적 삽입
+        if (labelCount > 0 && labelCount % 10 === 0) {
+          var bottomPaddingRow = curRow;
+          labelSheet.setRowHeight(bottomPaddingRow, 1);
+          labelSheet.getRange(bottomPaddingRow, 1, 1, 15).clearFormat();
+          
+          var nextTopPaddingRow = curRow + 1;
+          labelSheet.setRowHeight(nextTopPaddingRow, 10);
+          labelSheet.getRange(nextTopPaddingRow, 1, 1, 15).clearFormat();
+          
+          curRow += 2;
+        }
+        
+        var layout = colLayouts[labelCount % 2];
+        var r = curRow;
+        var c = layout.start;
+        var cc = layout.contentStart;
+        var qc = layout.qr;
+        
+        // 행 높이 조절
+        var isLastRowOfPage = (Math.floor((labelCount % 10) / 2) === 4);
+        if (isLastRowOfPage) {
+          labelSheet.setRowHeight(r, 5);
+          labelSheet.setRowHeight(r+1, 24);
+          labelSheet.setRowHeight(r+2, 32);
+          labelSheet.setRowHeight(r+3, 34);
+          labelSheet.setRowHeight(r+4, 34);
+          labelSheet.setRowHeight(r+5, 35);
+          labelSheet.setRowHeight(r+6, 6);
+        } else {
+          labelSheet.setRowHeight(r, 13);
+          labelSheet.setRowHeight(r+1, 28);
+          labelSheet.setRowHeight(r+2, 34);
+          labelSheet.setRowHeight(r+3, 36);
+          labelSheet.setRowHeight(r+4, 36);
+          labelSheet.setRowHeight(r+5, 36);
+          labelSheet.setRowHeight(r+6, 14);
+        }
+        
+        var cardRange = labelSheet.getRange(r, c, 7, 6);
+        cardRange.setBorder(true, true, true, true, false, false, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID);
+        cardRange.setBackground("#ffffff");
+        cardRange.setFontFamily("Noto Sans KR");
+        
+        var contentRange = labelSheet.getRange(r+1, cc, 5, 4);
+        contentRange.setBorder(true, true, true, true, true, true, "#475569", SpreadsheetApp.BorderStyle.SOLID);
+        
+        var titleCell = labelSheet.getRange(r+1, cc, 1, 4);
+        titleCell.merge().setValue(schoolName)
+          .setFontWeight("bold")
+          .setFontSize(10)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle")
+          .setBackground("#f8fafc");
+          
+        labelSheet.getRange(r+2, cc).setValue("종류")
+          .setFontWeight("bold")
+          .setFontSize(9)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle")
+          .setBackground("#f1f5f9");
+        
+        var typeCell = labelSheet.getRange(r+2, cc+1, 1, 3);
+        typeCell.merge().setValue(type)
+          .setFontSize(10)
+          .setFontWeight("bold")
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle");
+          
+        labelSheet.getRange(r+3, cc).setValue("관리 번호")
+          .setFontWeight("bold")
+          .setFontSize(9)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle")
+          .setBackground("#f1f5f9");
+          
+        var idCell = labelSheet.getRange(r+3, cc+1, 1, 2);
+        idCell.merge().setValue(id)
+          .setFontWeight("bold")
+          .setFontSize(10)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle");
+          
+        labelSheet.getRange(r+4, cc).setValue("관리책임자")
+          .setFontWeight("bold")
+          .setFontSize(9)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle")
+          .setBackground("#f1f5f9");
+          
+        var mParts = splitNameAndTitle_(manager);
+        labelSheet.getRange(r+4, cc+1).setValue(mParts.title)
+          .setFontSize(9)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle")
+          .setWrap(true);
+        labelSheet.getRange(r+4, cc+2).setValue(mParts.name)
+          .setFontSize(10)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle");
+          
+        labelSheet.getRange(r+5, cc).setValue("취급자")
+          .setFontWeight("bold")
+          .setFontSize(9)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle")
+          .setBackground("#f1f5f9");
+          
+        var oParts = splitNameAndTitle_(operator);
+        labelSheet.getRange(r+5, cc+1).setValue(oParts.title)
+          .setFontSize(9)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle")
+          .setWrap(true);
+        labelSheet.getRange(r+5, cc+2).setValue(oParts.name)
+          .setFontSize(10)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle");
+          
+        var masterRowIndex = item.masterRowIndex;
+        var masterCellA1 = masterSheet.getRange(masterRowIndex, qrLinkCol).getA1Notation();
+        var qrFormula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=" & ENCODEURL(\'마스터\'!' + masterCellA1 + '))';
+        
+        var qrCell = labelSheet.getRange(r+3, qc, 3, 1);
+        qrCell.merge().setFormula(qrFormula)
+          .setHorizontalAlignment("center")
+          .setVerticalAlignment("middle");
+          
+        if (labelCount % 2 === 1) {
+          curRow += 7;
+        }
+        labelCount++;
+      }
+      
+      // 취급자 변경 시 남은 라벨 칸 공백 패딩으로 채우기
+      while (labelCount % 10 !== 0) {
+        var layout = colLayouts[labelCount % 2];
+        var r = curRow;
+        
+        var isLastRowOfPage = (Math.floor((labelCount % 10) / 2) === 4);
+        if (isLastRowOfPage) {
+          labelSheet.setRowHeight(r, 5);
+          labelSheet.setRowHeight(r+1, 24);
+          labelSheet.setRowHeight(r+2, 32);
+          labelSheet.setRowHeight(r+3, 34);
+          labelSheet.setRowHeight(r+4, 34);
+          labelSheet.setRowHeight(r+5, 35);
+          labelSheet.setRowHeight(r+6, 6);
+        } else {
+          labelSheet.setRowHeight(r, 13);
+          labelSheet.setRowHeight(r+1, 28);
+          labelSheet.setRowHeight(r+2, 34);
+          labelSheet.setRowHeight(r+3, 36);
+          labelSheet.setRowHeight(r+4, 36);
+          labelSheet.setRowHeight(r+5, 36);
+          labelSheet.setRowHeight(r+6, 14);
+        }
+        
+        var cardRange = labelSheet.getRange(r, layout.start, 7, 6);
+        cardRange.clearFormat();
+        
+        if (labelCount % 2 === 1) {
+          curRow += 7;
+        }
+        labelCount++;
+      }
     }
-    
-    // 1. 물리적 라벨 영역 배경색 및 연한 칼선 테두리 설정 (B~G열, r~r+6행)
-    var cardRange = labelSheet.getRange(r, c, 7, 6);
-    cardRange.setBorder(true, true, true, true, false, false, "#cbd5e1", SpreadsheetApp.BorderStyle.SOLID);
-    cardRange.setBackground("#ffffff");
-    cardRange.setFontFamily("Noto Sans KR");
-    
-    // 2. 내부 데이터 표 영역 테두리 설정 (C~F열, r+1~r+5행) - 안전 여백 확보
-    var contentRange = labelSheet.getRange(r+1, cc, 5, 4);
-    contentRange.setBorder(true, true, true, true, true, true, "#475569", SpreadsheetApp.BorderStyle.SOLID);
-    
-    // 3. 기관명 (학교명)
-    var titleCell = labelSheet.getRange(r+1, cc, 1, 4);
-    titleCell.merge().setValue(schoolName)
-      .setFontWeight("bold")
-      .setFontSize(10)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setBackground("#f8fafc");
-      
-    // 4. 종류
-    labelSheet.getRange(r+2, cc).setValue("종류")
-      .setFontWeight("bold")
-      .setFontSize(9)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setBackground("#f1f5f9");
-    
-    var typeCell = labelSheet.getRange(r+2, cc+1, 1, 3); // D~F열 병합
-    typeCell.merge().setValue(type)
-      .setFontSize(10)
-      .setFontWeight("bold")
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle");
-      
-    // 5. 관리 번호
-    labelSheet.getRange(r+3, cc).setValue("관리 번호")
-      .setFontWeight("bold")
-      .setFontSize(9)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setBackground("#f1f5f9");
-      
-    var idCell = labelSheet.getRange(r+3, cc+1, 1, 2); // D~E열 병합
-    idCell.merge().setValue(id)
-      .setFontWeight("bold")
-      .setFontSize(10)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle");
-      
-    // 6. 관리책임자
-    labelSheet.getRange(r+4, cc).setValue("관리책임자")
-      .setFontWeight("bold")
-      .setFontSize(9)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setBackground("#f1f5f9");
-      
-    var mParts = splitNameAndTitle_(manager);
-    labelSheet.getRange(r+4, cc+1).setValue(mParts.title)
-      .setFontSize(9)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setWrap(true);
-    labelSheet.getRange(r+4, cc+2).setValue(mParts.name)
-      .setFontSize(10)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle");
-      
-    // 7. 취급자
-    labelSheet.getRange(r+5, cc).setValue("취급자")
-      .setFontWeight("bold")
-      .setFontSize(9)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setBackground("#f1f5f9");
-      
-    var oParts = splitNameAndTitle_(operator);
-    labelSheet.getRange(r+5, cc+1).setValue(oParts.title)
-      .setFontSize(9)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle")
-      .setWrap(true);
-    labelSheet.getRange(r+5, cc+2).setValue(oParts.name)
-      .setFontSize(10)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle");
-      
-    // 8. QR코드 (F3:F5 또는 M3:M5 병합하여 차트 API 적용, 여백 chld=L|2 옵션 추가)
-    var masterRowIndex = item.masterRowIndex;
-    var masterCellA1 = masterSheet.getRange(masterRowIndex, qrLinkCol).getA1Notation();
-    var qrFormula = '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=150x150&ecc=L&margin=2&data=" & ENCODEURL(\'마스터\'!' + masterCellA1 + '))';
-    
-    var qrCell = labelSheet.getRange(r+3, qc, 3, 1);
-    qrCell.merge().setFormula(qrFormula)
-      .setHorizontalAlignment("center")
-      .setVerticalAlignment("middle");
-      
-    // 두 번째 열 라벨까지 다 그리면 한 행 아래로 줄바꿈 (애니라벨 10칸은 세로 라벨 간 갭이 0mm이므로 간격 행 없이 7행씩 연속 배치)
-    if (labelCount % 2 === 1) {
-      curRow += 7; // 라벨 카드(7개 행)만큼 증가하여 다음 줄로 이동
-    }
-    labelCount++;
   }
   
   // 시트 활성화 및 완성 알림 (무한 대기 시간초과 방지 위해 toast 처리)
